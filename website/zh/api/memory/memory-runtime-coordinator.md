@@ -1,157 +1,427 @@
 # `@codesoul-co/hypha-memory` / `memory-runtime-coordinator`
 
 - 包索引: [`@codesoul-co/hypha-memory`](/zh/api/memory)
-- 模块指南: [学习与组合说明](/zh/packages/memory)
 - 源码: [`packages/memory/src/memory-runtime-coordinator.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
 - 导出数: **12**
+
+## 模块用法
+
+用于执行该边界的运行时行为。Memory runtime coordinator 模块公开 3 类、8 接口、1 类型。
+
+### 从包入口导入
+
+```ts
+import {
+  InMemoryMemoryRuntimeControlStore,
+  MemoryRuntimeCoordinator,
+  StructuredMemoryRuntimeControlStore,
+} from '@codesoul-co/hypha-memory';
+
+import type {
+  MemoryRuntimeActiveState,
+  MemoryRuntimeControlStore,
+  MemoryRuntimeCoordinatorOptions,
+  MemoryRuntimeCreator,
+  MemoryRuntimeGeneration,
+  MemoryRuntimeRevisionState,
+  MemoryRuntimeSwitchResult,
+  StructuredMemoryRuntimeControlStoreOptions,
+} from '@codesoul-co/hypha-memory';
+
+// 完整导出列表见下方。
+```
+
+### 使用要点
+
+- 9 个类型/接口用于应用代码、Adapter 或测试中的静态契约；请使用 `import type`，运行时不应依赖它们。
+- 3 个类提供可实例化的运行时实现；构造参数与公开方法在各自条目中完整列出。
+
 
 ## 公共导出
 
 | Symbol | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `InMemoryMemoryRuntimeControlStore` | 类 | <code>new InMemoryMemoryRuntimeControlStore(): InMemoryMemoryRuntimeControlStore</code> | In Memory Memory Runtime Control Store 的运行时实现；公开构造函数与成员见下表。 |
-| `MemoryRuntimeCoordinator` | 类 | <code>new MemoryRuntimeCoordinator(options: MemoryRuntimeCoordinatorOptions): MemoryRuntimeCoordinator</code> | Memory Runtime Coordinator 的运行时实现；公开构造函数与成员见下表。 |
-| `StructuredMemoryRuntimeControlStore` | 类 | <code>new StructuredMemoryRuntimeControlStore(options: StructuredMemoryRuntimeControlStoreOptions): StructuredMemoryRuntimeControlStore</code> | Structured Memory Runtime Control Store 的运行时实现；公开构造函数与成员见下表。 |
-| `MemoryRuntimeActiveState` | 接口 | <code>interface MemoryRuntimeActiveState extends MemoryRuntimeRevisionState</code> | Memory Runtime Active State 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeControlStore` | 接口 | <code>interface MemoryRuntimeControlStore</code> | Memory Runtime Control Store 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeCoordinatorOptions` | 接口 | <code>interface MemoryRuntimeCoordinatorOptions</code> | Memory Runtime Coordinator Options 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeCreator` | 接口 | <code>interface MemoryRuntimeCreator</code> | Memory Runtime Creator 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeGeneration` | 接口 | <code>interface MemoryRuntimeGeneration</code> | Memory Runtime Generation 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeRevisionState` | 接口 | <code>interface MemoryRuntimeRevisionState</code> | Memory Runtime Revision State 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeSwitchResult` | 接口 | <code>interface MemoryRuntimeSwitchResult extends MemoryRuntimeGeneration</code> | Memory Runtime Switch Result 的字段契约；完整字段见下表。 |
-| `StructuredMemoryRuntimeControlStoreOptions` | 接口 | <code>interface StructuredMemoryRuntimeControlStoreOptions</code> | Structured Memory Runtime Control Store Options 的字段契约；完整字段见下表。 |
-| `MemoryRuntimeRevisionStatus` | 类型 | <code>type MemoryRuntimeRevisionStatus = 'active' &#124; 'draining' &#124; 'retired' &#124; 'quarantined'</code> | Memory Runtime Revision Status 的公共类型别名。 |
+| `InMemoryMemoryRuntimeControlStore` | 类 | <code>new InMemoryMemoryRuntimeControlStore(): InMemoryMemoryRuntimeControlStore</code> | In Memory Memory Runtime Control Store 类，共公开 7 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `MemoryRuntimeCoordinator` | 类 | <code>new MemoryRuntimeCoordinator(options: MemoryRuntimeCoordinatorOptions): MemoryRuntimeCoordinator</code> | Memory Runtime Coordinator 类，共公开 8 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `StructuredMemoryRuntimeControlStore` | 类 | <code>new StructuredMemoryRuntimeControlStore(options: StructuredMemoryRuntimeControlStoreOptions): StructuredMemoryRuntimeControlStore</code> | Structured Memory Runtime Control Store 类，共公开 7 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `MemoryRuntimeActiveState` | 接口 | <code>interface MemoryRuntimeActiveState extends MemoryRuntimeRevisionState</code> | Memory Runtime Active State 接口，共包含 14 个公开字段或方法。 |
+| `MemoryRuntimeControlStore` | 接口 | <code>interface MemoryRuntimeControlStore</code> | Memory Runtime Control Store 接口，共包含 6 个公开字段或方法。 |
+| `MemoryRuntimeCoordinatorOptions` | 接口 | <code>interface MemoryRuntimeCoordinatorOptions</code> | Memory Runtime Coordinator Options 接口，共包含 6 个公开字段或方法。 |
+| `MemoryRuntimeCreator` | 接口 | <code>interface MemoryRuntimeCreator</code> | Memory Runtime Creator 接口，共包含 1 个公开字段或方法。 |
+| `MemoryRuntimeGeneration` | 接口 | <code>interface MemoryRuntimeGeneration</code> | Memory Runtime Generation 接口，共包含 6 个公开字段或方法。 |
+| `MemoryRuntimeRevisionState` | 接口 | <code>interface MemoryRuntimeRevisionState</code> | Memory Runtime Revision State 接口，共包含 14 个公开字段或方法。 |
+| `MemoryRuntimeSwitchResult` | 接口 | <code>interface MemoryRuntimeSwitchResult extends MemoryRuntimeGeneration</code> | Memory Runtime Switch Result 接口，共包含 7 个公开字段或方法。 |
+| `StructuredMemoryRuntimeControlStoreOptions` | 接口 | <code>interface StructuredMemoryRuntimeControlStoreOptions</code> | Structured Memory Runtime Control Store Options 接口，共包含 3 个公开字段或方法。 |
+| `MemoryRuntimeRevisionStatus` | 类型 | <code>type MemoryRuntimeRevisionStatus = 'active' &#124; 'draining' &#124; 'retired' &#124; 'quarantined'</code> | Memory Runtime Revision Status 公共类型别名；完整类型表达式见声明。 |
 
-## `InMemoryMemoryRuntimeControlStore` 公开成员
+## `InMemoryMemoryRuntimeControlStore`
+
+In Memory Memory Runtime Control Store 类，共公开 7 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { InMemoryMemoryRuntimeControlStore } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export declare class InMemoryMemoryRuntimeControlStore implements MemoryRuntimeControlStore {
+    readonly durability: "ephemeral";
+    getActive(coordinatorId: string): Promise<MemoryRuntimeActiveState | null>;
+    activate(coordinatorId: string, expectedGeneration: number | null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise<boolean>;
+    getRevision(coordinatorId: string, profileRevision: string): Promise<MemoryRuntimeRevisionState | null>;
+    setRevision(state: MemoryRuntimeRevisionState): Promise<void>;
+    listRevisions(coordinatorId: string): Promise<MemoryRuntimeRevisionState[]>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `activate` | 方法 | <code>activate(coordinatorId: string, expectedGeneration: number &#124; null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise&lt;boolean&gt;</code> | activate 的公开运行时操作。 |
+| `activate` | 方法 | <code>activate(coordinatorId: string, expectedGeneration: number &#124; null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise&lt;boolean&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 | `constructor` | 构造函数 | <code>(): InMemoryMemoryRuntimeControlStore</code> | 创建该类的实例。 |
-| `durability` | 属性 | <code>durability: "ephemeral"</code> | durability 字段。 |
-| `getActive` | 方法 | <code>getActive(coordinatorId: string): Promise&lt;MemoryRuntimeActiveState &#124; null&gt;</code> | 读取 Active。 |
-| `getRevision` | 方法 | <code>getRevision(coordinatorId: string, profileRevision: string): Promise&lt;MemoryRuntimeRevisionState &#124; null&gt;</code> | 读取 Revision。 |
-| `listRevisions` | 方法 | <code>listRevisions(coordinatorId: string): Promise&lt;MemoryRuntimeRevisionState[]&gt;</code> | 列出 Revisions。 |
-| `setRevision` | 方法 | <code>setRevision(state: MemoryRuntimeRevisionState): Promise&lt;void&gt;</code> | 写入 Revision。 |
+| `durability` | 属性 | <code>readonly durability: "ephemeral"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `getActive` | 方法 | <code>getActive(coordinatorId: string): Promise&lt;MemoryRuntimeActiveState &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `getRevision` | 方法 | <code>getRevision(coordinatorId: string, profileRevision: string): Promise&lt;MemoryRuntimeRevisionState &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `listRevisions` | 方法 | <code>listRevisions(coordinatorId: string): Promise&lt;MemoryRuntimeRevisionState[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `setRevision` | 方法 | <code>setRevision(state: MemoryRuntimeRevisionState): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `MemoryRuntimeCoordinator` 公开成员
+## `MemoryRuntimeCoordinator`
+
+Memory Runtime Coordinator 类，共公开 8 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { MemoryRuntimeCoordinator } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export declare class MemoryRuntimeCoordinator {
+    constructor(options: MemoryRuntimeCoordinatorOptions);
+    initialize(input: unknown, references?: ReadonlyMap<string, unknown>): Promise<MemoryRuntimeSwitchResult>;
+    switchRevision(input: unknown, references?: ReadonlyMap<string, unknown>, expectedProfileRevision?: string): Promise<MemoryRuntimeSwitchResult>;
+    withRuntime<T>(operation: (runtime: MemoryRuntime, generation: MemoryRuntimeGeneration) => Promise<T>): Promise<T>;
+    probeActive(): Promise<MemoryRuntimeRevisionState>;
+    current(): MemoryRuntimeGeneration | null;
+    drain(): Promise<void>;
+    close(): Promise<void>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `close` | 方法 | <code>close(): Promise&lt;void&gt;</code> | close 的公开运行时操作。 |
+| `close` | 方法 | <code>close(): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 | `constructor` | 构造函数 | <code>(options: MemoryRuntimeCoordinatorOptions): MemoryRuntimeCoordinator</code> | 创建该类的实例。 |
-| `current` | 方法 | <code>current(): MemoryRuntimeGeneration &#124; null</code> | current 的公开运行时操作。 |
-| `drain` | 方法 | <code>drain(): Promise&lt;void&gt;</code> | drain 的公开运行时操作。 |
-| `initialize` | 方法 | <code>initialize(input: unknown, references?: ReadonlyMap&lt;string, unknown&gt;): Promise&lt;MemoryRuntimeSwitchResult&gt;</code> | initialize 的公开运行时操作。 |
-| `probeActive` | 方法 | <code>probeActive(): Promise&lt;MemoryRuntimeRevisionState&gt;</code> | probe Active 的公开运行时操作。 |
-| `switchRevision` | 方法 | <code>switchRevision(input: unknown, references?: ReadonlyMap&lt;string, unknown&gt;, expectedProfileRevision?: string): Promise&lt;MemoryRuntimeSwitchResult&gt;</code> | switch Revision 的公开运行时操作。 |
-| `withRuntime` | 方法 | <code>withRuntime&lt;T&gt;(operation: (runtime: MemoryRuntime, generation: MemoryRuntimeGeneration) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt;</code> | with Runtime 的公开运行时操作。 |
+| `current` | 方法 | <code>current(): MemoryRuntimeGeneration &#124; null</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `drain` | 方法 | <code>drain(): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `initialize` | 方法 | <code>initialize(input: unknown, references?: ReadonlyMap&lt;string, unknown&gt;): Promise&lt;MemoryRuntimeSwitchResult&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `probeActive` | 方法 | <code>probeActive(): Promise&lt;MemoryRuntimeRevisionState&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `switchRevision` | 方法 | <code>switchRevision(input: unknown, references?: ReadonlyMap&lt;string, unknown&gt;, expectedProfileRevision?: string): Promise&lt;MemoryRuntimeSwitchResult&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `withRuntime` | 方法 | <code>withRuntime&lt;T&gt;(operation: (runtime: MemoryRuntime, generation: MemoryRuntimeGeneration) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `StructuredMemoryRuntimeControlStore` 公开成员
+## `StructuredMemoryRuntimeControlStore`
+
+Structured Memory Runtime Control Store 类，共公开 7 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { StructuredMemoryRuntimeControlStore } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export declare class StructuredMemoryRuntimeControlStore implements MemoryRuntimeControlStore {
+    readonly durability: "durable";
+    constructor(options: StructuredMemoryRuntimeControlStoreOptions);
+    getActive(coordinatorId: string): Promise<MemoryRuntimeActiveState | null>;
+    activate(coordinatorId: string, expectedGeneration: number | null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise<boolean>;
+    getRevision(coordinatorId: string, profileRevision: string): Promise<MemoryRuntimeRevisionState | null>;
+    setRevision(state: MemoryRuntimeRevisionState): Promise<void>;
+    listRevisions(coordinatorId: string): Promise<MemoryRuntimeRevisionState[]>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `activate` | 方法 | <code>activate(coordinatorId: string, expectedGeneration: number &#124; null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise&lt;boolean&gt;</code> | activate 的公开运行时操作。 |
+| `activate` | 方法 | <code>activate(coordinatorId: string, expectedGeneration: number &#124; null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise&lt;boolean&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 | `constructor` | 构造函数 | <code>(options: StructuredMemoryRuntimeControlStoreOptions): StructuredMemoryRuntimeControlStore</code> | 创建该类的实例。 |
-| `durability` | 属性 | <code>durability: "durable"</code> | durability 字段。 |
-| `getActive` | 方法 | <code>getActive(coordinatorId: string): Promise&lt;MemoryRuntimeActiveState &#124; null&gt;</code> | 读取 Active。 |
-| `getRevision` | 方法 | <code>getRevision(coordinatorId: string, profileRevision: string): Promise&lt;MemoryRuntimeRevisionState &#124; null&gt;</code> | 读取 Revision。 |
-| `listRevisions` | 方法 | <code>listRevisions(coordinatorId: string): Promise&lt;MemoryRuntimeRevisionState[]&gt;</code> | 列出 Revisions。 |
-| `setRevision` | 方法 | <code>setRevision(state: MemoryRuntimeRevisionState): Promise&lt;void&gt;</code> | 写入 Revision。 |
+| `durability` | 属性 | <code>readonly durability: "durable"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `getActive` | 方法 | <code>getActive(coordinatorId: string): Promise&lt;MemoryRuntimeActiveState &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `getRevision` | 方法 | <code>getRevision(coordinatorId: string, profileRevision: string): Promise&lt;MemoryRuntimeRevisionState &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `listRevisions` | 方法 | <code>listRevisions(coordinatorId: string): Promise&lt;MemoryRuntimeRevisionState[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `setRevision` | 方法 | <code>setRevision(state: MemoryRuntimeRevisionState): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `MemoryRuntimeActiveState` 契约字段
+## `MemoryRuntimeActiveState`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `capabilityHash` | 属性 | <code>capabilityHash: string</code> | capability Hash 字段。 |
-| `capabilitySnapshot` | 属性 | <code>capabilitySnapshot: MemoryManagementCapabilities</code> | capability Snapshot 字段。 |
-| `coordinatorId` | 属性 | <code>coordinatorId: string</code> | coordinator Id 字段。 |
-| `generation` | 属性 | <code>generation: number</code> | generation 字段。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `observedAt` | 属性 | <code>observedAt: string</code> | observed At 字段。 |
-| `profileHash` | 属性 | <code>profileHash: string</code> | profile Hash 字段。 |
-| `profileId` | 属性 | <code>profileId: string</code> | profile Id 字段。 |
-| `profileRevision` | 属性 | <code>profileRevision: string</code> | profile Revision 字段。 |
-| `providerId` | 属性 | <code>providerId: string</code> | provider Id 字段。 |
-| `providerRevision` | 属性 | <code>providerRevision: string</code> | provider Revision 字段。 |
-| `quarantineError` | 属性 | <code>quarantineError: NormalizedMemoryError</code> | quarantine Error 字段。 |
-| `runtimeId` | 属性 | <code>runtimeId: string</code> | runtime Id 字段。 |
-| `status` | 属性 | <code>status: MemoryRuntimeRevisionStatus</code> | status 字段。 |
+Memory Runtime Active State 接口，共包含 14 个公开字段或方法。
 
-## `MemoryRuntimeControlStore` 契约字段
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeActiveState } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface MemoryRuntimeActiveState extends MemoryRuntimeRevisionState {
+    id: string;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `activate` | 方法 | <code>activate(coordinatorId: string, expectedGeneration: number &#124; null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise&lt;boolean&gt;</code> | activate 的公开运行时操作。 |
-| `durability` | 属性 | <code>durability: "ephemeral" &#124; "durable"</code> | durability 字段。 |
-| `getActive` | 方法 | <code>getActive(coordinatorId: string): Promise&lt;MemoryRuntimeActiveState &#124; null&gt;</code> | 读取 Active。 |
-| `getRevision` | 方法 | <code>getRevision(coordinatorId: string, profileRevision: string): Promise&lt;MemoryRuntimeRevisionState &#124; null&gt;</code> | 读取 Revision。 |
-| `listRevisions` | 方法 | <code>listRevisions(coordinatorId: string): Promise&lt;MemoryRuntimeRevisionState[]&gt;</code> | 列出 Revisions。 |
-| `setRevision` | 方法 | <code>setRevision(state: MemoryRuntimeRevisionState): Promise&lt;void&gt;</code> | 写入 Revision。 |
+| `capabilityHash` | 属性 | <code>capabilityHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `capabilitySnapshot` | 属性 | <code>capabilitySnapshot: MemoryManagementCapabilities</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `coordinatorId` | 属性 | <code>coordinatorId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `generation` | 属性 | <code>generation: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `id` | 属性 | <code>id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `observedAt` | 属性 | <code>observedAt: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileHash` | 属性 | <code>profileHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileId` | 属性 | <code>profileId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRevision` | 属性 | <code>profileRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerId` | 属性 | <code>providerId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerRevision` | 属性 | <code>providerRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `quarantineError` | 属性 | <code>quarantineError?: NormalizedMemoryError</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `runtimeId` | 属性 | <code>runtimeId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `status` | 属性 | <code>status: MemoryRuntimeRevisionStatus</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `MemoryRuntimeCoordinatorOptions` 契约字段
+## `MemoryRuntimeControlStore`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `capabilityProbeIntervalMs` | 属性 | <code>capabilityProbeIntervalMs: number</code> | capability Probe Interval Ms 字段。 |
-| `factory` | 属性 | <code>factory: MemoryRuntimeFactory &#124; MemoryRuntimeCreator</code> | factory 字段。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `now` | 方法 | <code>now(): Date</code> | now 的公开运行时操作。 |
-| `requireDurableStore` | 属性 | <code>requireDurableStore: boolean</code> | require Durable Store 字段。 |
-| `store` | 属性 | <code>store: MemoryRuntimeControlStore</code> | store 字段。 |
+Memory Runtime Control Store 接口，共包含 6 个公开字段或方法。
 
-## `MemoryRuntimeCreator` 契约字段
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeControlStore } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `create` | 方法 | <code>create(input: unknown, references?: ReadonlyMap&lt;string, unknown&gt;): Promise&lt;MemoryRuntime&gt;</code> | 创建 create。 |
+### 声明
 
-## `MemoryRuntimeGeneration` 契约字段
+```text
+export interface MemoryRuntimeControlStore {
+    readonly durability: 'ephemeral' | 'durable';
+    getActive(coordinatorId: string): Promise<MemoryRuntimeActiveState | null>;
+    activate(coordinatorId: string, expectedGeneration: number | null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise<boolean>;
+    getRevision(coordinatorId: string, profileRevision: string): Promise<MemoryRuntimeRevisionState | null>;
+    setRevision(state: MemoryRuntimeRevisionState): Promise<void>;
+    listRevisions(coordinatorId: string): Promise<MemoryRuntimeRevisionState[]>;
+}
+```
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `generation` | 属性 | <code>generation: number</code> | generation 字段。 |
-| `profileId` | 属性 | <code>profileId: string</code> | profile Id 字段。 |
-| `profileRevision` | 属性 | <code>profileRevision: string</code> | profile Revision 字段。 |
-| `providerId` | 属性 | <code>providerId: string</code> | provider Id 字段。 |
-| `providerRevision` | 属性 | <code>providerRevision: string</code> | provider Revision 字段。 |
-| `runtimeId` | 属性 | <code>runtimeId: string</code> | runtime Id 字段。 |
-
-## `MemoryRuntimeRevisionState` 契约字段
-
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `capabilityHash` | 属性 | <code>capabilityHash: string</code> | capability Hash 字段。 |
-| `capabilitySnapshot` | 属性 | <code>capabilitySnapshot: MemoryManagementCapabilities</code> | capability Snapshot 字段。 |
-| `coordinatorId` | 属性 | <code>coordinatorId: string</code> | coordinator Id 字段。 |
-| `generation` | 属性 | <code>generation: number</code> | generation 字段。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `observedAt` | 属性 | <code>observedAt: string</code> | observed At 字段。 |
-| `profileHash` | 属性 | <code>profileHash: string</code> | profile Hash 字段。 |
-| `profileId` | 属性 | <code>profileId: string</code> | profile Id 字段。 |
-| `profileRevision` | 属性 | <code>profileRevision: string</code> | profile Revision 字段。 |
-| `providerId` | 属性 | <code>providerId: string</code> | provider Id 字段。 |
-| `providerRevision` | 属性 | <code>providerRevision: string</code> | provider Revision 字段。 |
-| `quarantineError` | 属性 | <code>quarantineError: NormalizedMemoryError</code> | quarantine Error 字段。 |
-| `runtimeId` | 属性 | <code>runtimeId: string</code> | runtime Id 字段。 |
-| `status` | 属性 | <code>status: MemoryRuntimeRevisionStatus</code> | status 字段。 |
-
-## `MemoryRuntimeSwitchResult` 契约字段
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `generation` | 属性 | <code>generation: number</code> | generation 字段。 |
-| `previousProfileRevision` | 属性 | <code>previousProfileRevision: string</code> | previous Profile Revision 字段。 |
-| `profileId` | 属性 | <code>profileId: string</code> | profile Id 字段。 |
-| `profileRevision` | 属性 | <code>profileRevision: string</code> | profile Revision 字段。 |
-| `providerId` | 属性 | <code>providerId: string</code> | provider Id 字段。 |
-| `providerRevision` | 属性 | <code>providerRevision: string</code> | provider Revision 字段。 |
-| `runtimeId` | 属性 | <code>runtimeId: string</code> | runtime Id 字段。 |
+| `activate` | 方法 | <code>activate(coordinatorId: string, expectedGeneration: number &#124; null, next: MemoryRuntimeActiveState, previous?: MemoryRuntimeRevisionState): Promise&lt;boolean&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `durability` | 属性 | <code>readonly durability: "ephemeral" &#124; "durable"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `getActive` | 方法 | <code>getActive(coordinatorId: string): Promise&lt;MemoryRuntimeActiveState &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `getRevision` | 方法 | <code>getRevision(coordinatorId: string, profileRevision: string): Promise&lt;MemoryRuntimeRevisionState &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `listRevisions` | 方法 | <code>listRevisions(coordinatorId: string): Promise&lt;MemoryRuntimeRevisionState[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `setRevision` | 方法 | <code>setRevision(state: MemoryRuntimeRevisionState): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `StructuredMemoryRuntimeControlStoreOptions` 契约字段
+## `MemoryRuntimeCoordinatorOptions`
+
+Memory Runtime Coordinator Options 接口，共包含 6 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeCoordinatorOptions } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface MemoryRuntimeCoordinatorOptions {
+    id: string;
+    factory: MemoryRuntimeFactory | MemoryRuntimeCreator;
+    store: MemoryRuntimeControlStore;
+    requireDurableStore?: boolean;
+    now?: () => Date;
+    capabilityProbeIntervalMs?: number;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `activeTable` | 属性 | <code>activeTable: string</code> | active Table 字段。 |
-| `provider` | 属性 | <code>provider: StructuredStoreProvider</code> | provider 字段。 |
-| `revisionTable` | 属性 | <code>revisionTable: string</code> | revision Table 字段。 |
+| `capabilityProbeIntervalMs` | 属性 | <code>capabilityProbeIntervalMs?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `factory` | 属性 | <code>factory: MemoryRuntimeFactory &#124; MemoryRuntimeCreator</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `id` | 属性 | <code>id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `now` | 方法 | <code>now?(): Date</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `requireDurableStore` | 属性 | <code>requireDurableStore?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `store` | 属性 | <code>store: MemoryRuntimeControlStore</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRuntimeCreator`
+
+Memory Runtime Creator 接口，共包含 1 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeCreator } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface MemoryRuntimeCreator {
+    create(input: unknown, references?: ReadonlyMap<string, unknown>): Promise<MemoryRuntime>;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `create` | 方法 | <code>create(input: unknown, references?: ReadonlyMap&lt;string, unknown&gt;): Promise&lt;MemoryRuntime&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+
+## `MemoryRuntimeGeneration`
+
+Memory Runtime Generation 接口，共包含 6 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeGeneration } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface MemoryRuntimeGeneration {
+    generation: number;
+    profileId: string;
+    profileRevision: string;
+    providerId: string;
+    providerRevision: string;
+    runtimeId: string;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `generation` | 属性 | <code>generation: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileId` | 属性 | <code>profileId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRevision` | 属性 | <code>profileRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerId` | 属性 | <code>providerId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerRevision` | 属性 | <code>providerRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `runtimeId` | 属性 | <code>runtimeId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRuntimeRevisionState`
+
+Memory Runtime Revision State 接口，共包含 14 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeRevisionState } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface MemoryRuntimeRevisionState {
+    id: string;
+    coordinatorId: string;
+    profileId: string;
+    profileRevision: string;
+    providerId: string;
+    providerRevision: string;
+    runtimeId: string;
+    profileHash: string;
+    capabilityHash: string;
+    capabilitySnapshot: MemoryManagementCapabilities;
+    status: MemoryRuntimeRevisionStatus;
+    generation: number;
+    observedAt: string;
+    quarantineError?: NormalizedMemoryError;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `capabilityHash` | 属性 | <code>capabilityHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `capabilitySnapshot` | 属性 | <code>capabilitySnapshot: MemoryManagementCapabilities</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `coordinatorId` | 属性 | <code>coordinatorId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `generation` | 属性 | <code>generation: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `id` | 属性 | <code>id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `observedAt` | 属性 | <code>observedAt: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileHash` | 属性 | <code>profileHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileId` | 属性 | <code>profileId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRevision` | 属性 | <code>profileRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerId` | 属性 | <code>providerId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerRevision` | 属性 | <code>providerRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `quarantineError` | 属性 | <code>quarantineError?: NormalizedMemoryError</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `runtimeId` | 属性 | <code>runtimeId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `status` | 属性 | <code>status: MemoryRuntimeRevisionStatus</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRuntimeSwitchResult`
+
+Memory Runtime Switch Result 接口，共包含 7 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRuntimeSwitchResult } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface MemoryRuntimeSwitchResult extends MemoryRuntimeGeneration {
+    previousProfileRevision?: string;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `generation` | 属性 | <code>generation: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `previousProfileRevision` | 属性 | <code>previousProfileRevision?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileId` | 属性 | <code>profileId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRevision` | 属性 | <code>profileRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerId` | 属性 | <code>providerId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerRevision` | 属性 | <code>providerRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `runtimeId` | 属性 | <code>runtimeId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `StructuredMemoryRuntimeControlStoreOptions`
+
+Structured Memory Runtime Control Store Options 接口，共包含 3 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { StructuredMemoryRuntimeControlStoreOptions } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export interface StructuredMemoryRuntimeControlStoreOptions {
+    provider: StructuredStoreProvider;
+    activeTable?: string;
+    revisionTable?: string;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `activeTable` | 属性 | <code>activeTable?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `provider` | 属性 | <code>provider: StructuredStoreProvider</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `revisionTable` | 属性 | <code>revisionTable?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRuntimeRevisionStatus`
+
+Memory Runtime Revision Status 公共类型别名；完整类型表达式见声明。
+
+- 种类: 类型
+- 导入: `import type { MemoryRuntimeRevisionStatus } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`memory-runtime-coordinator`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/memory-runtime-coordinator.ts)
+
+### 声明
+
+```text
+export type MemoryRuntimeRevisionStatus = 'active' | 'draining' | 'retired' | 'quarantined';
+```

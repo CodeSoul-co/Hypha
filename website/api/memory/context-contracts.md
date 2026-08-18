@@ -1,414 +1,1058 @@
 # `@codesoul-co/hypha-memory` / `context-contracts`
 
 - Package index: [`@codesoul-co/hypha-memory`](/api/memory)
-- Package guide: [learning and composition guide](/packages/memory)
 - Source: [`packages/memory/src/context-contracts.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 - Exports: **29**
+
+## Using this module
+
+Use the Context contracts module for declaring and runtime-validating contracts. It exports 28 interfaces, 1 type.
+
+### Import from the package entrypoint
+
+```ts
+import type {
+  ContextBudgetPlan,
+  ContextBuildExplanation,
+  ContextBuildInput,
+  ContextBuildRequest,
+  ContextBundle,
+  ContextCompactionPolicySpec,
+  ContextConflict,
+  ContextEnvelope,
+} from '@codesoul-co/hypha-memory';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 29 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `ContextBudgetPlan` | interface | <code>interface ContextBudgetPlan</code> | Field contract for Context Budget Plan; see all contract members below. |
-| `ContextBuildExplanation` | interface | <code>interface ContextBuildExplanation</code> | Field contract for Context Build Explanation; see all contract members below. |
-| `ContextBuildInput` | interface | <code>interface ContextBuildInput extends ContextBuildRequest</code> | Field contract for Context Build Input; see all contract members below. |
-| `ContextBuildRequest` | interface | <code>interface ContextBuildRequest</code> | Field contract for Context Build Request; see all contract members below. |
-| `ContextBundle` | interface | <code>interface ContextBundle</code> | Field contract for Context Bundle; see all contract members below. |
-| `ContextCompactionPolicySpec` | interface | <code>interface ContextCompactionPolicySpec</code> | Field contract for Context Compaction Policy Spec; see all contract members below. |
-| `ContextConflict` | interface | <code>interface ContextConflict</code> | Field contract for Context Conflict; see all contract members below. |
-| `ContextEnvelope` | interface | <code>interface ContextEnvelope</code> | Field contract for Context Envelope; see all contract members below. |
-| `ContextInjectionGateway` | interface | <code>interface ContextInjectionGateway</code> | Field contract for Context Injection Gateway; see all contract members below. |
-| `ContextItem` | interface | <code>interface ContextItem</code> | Field contract for Context Item; see all contract members below. |
-| `ContextItemPolicyDecision` | interface | <code>interface ContextItemPolicyDecision</code> | Field contract for Context Item Policy Decision; see all contract members below. |
-| `ContextItemPolicyEvaluator` | interface | <code>interface ContextItemPolicyEvaluator</code> | Field contract for Context Item Policy Evaluator; see all contract members below. |
-| `ContextItemPolicyInput` | interface | <code>interface ContextItemPolicyInput</code> | Field contract for Context Item Policy Input; see all contract members below. |
-| `ContextProfileSpec` | interface | <code>interface ContextProfileSpec</code> | Field contract for Context Profile Spec; see all contract members below. |
-| `ContextProvenanceLabel` | interface | <code>interface ContextProvenanceLabel</code> | Field contract for Context Provenance Label; see all contract members below. |
-| `ContextRankingPolicySpec` | interface | <code>interface ContextRankingPolicySpec</code> | Field contract for Context Ranking Policy Spec; see all contract members below. |
-| `ContextRejectedItem` | interface | <code>interface ContextRejectedItem</code> | Field contract for Context Rejected Item; see all contract members below. |
-| `ContextSourceBudget` | interface | <code>interface ContextSourceBudget</code> | Field contract for Context Source Budget; see all contract members below. |
-| `ContextSourceResolutionInput` | interface | <code>interface ContextSourceResolutionInput extends ResolvedContextBuildInput</code> | Field contract for Context Source Resolution Input; see all contract members below. |
-| `ContextSourceResolver` | interface | <code>interface ContextSourceResolver</code> | Field contract for Context Source Resolver; see all contract members below. |
-| `ContextSourceResolverRegistry` | interface | <code>interface ContextSourceResolverRegistry</code> | Field contract for Context Source Resolver Registry; see all contract members below. |
-| `ContextSourceSpec` | interface | <code>interface ContextSourceSpec</code> | Field contract for Context Source Spec; see all contract members below. |
-| `ContextTruncationPolicySpec` | interface | <code>interface ContextTruncationPolicySpec</code> | Field contract for Context Truncation Policy Spec; see all contract members below. |
-| `ContextTruncationRecord` | interface | <code>interface ContextTruncationRecord</code> | Field contract for Context Truncation Record; see all contract members below. |
-| `MemoryContextBuilder` | interface | <code>interface MemoryContextBuilder</code> | Field contract for Memory Context Builder; see all contract members below. |
-| `PromptSegment` | interface | <code>interface PromptSegment</code> | Field contract for Prompt Segment; see all contract members below. |
-| `ResolvedContextBuildInput` | interface | <code>interface ResolvedContextBuildInput extends ContextBuildRequest</code> | Field contract for Resolved Context Build Input; see all contract members below. |
-| `TokenEstimator` | interface | <code>interface TokenEstimator</code> | Field contract for Token Estimator; see all contract members below. |
-| `ContextSourceType` | type | <code>type ContextSourceType = 'system' &#124; 'workflow_state' &#124; 'messages' &#124; 'working_memory' &#124; 'long_term_memory' &#124; 'tool_observation' &#124; 'artifact' &#124; 'human_review' &#124; 'custom'</code> | Public type alias for Context Source Type. |
+| `ContextBudgetPlan` | interface | <code>interface ContextBudgetPlan</code> | Context Budget Plan interface with 6 public fields or methods. |
+| `ContextBuildExplanation` | interface | <code>interface ContextBuildExplanation</code> | Context Build Explanation interface with 6 public fields or methods. |
+| `ContextBuildInput` | interface | <code>interface ContextBuildInput extends ContextBuildRequest</code> | Context Build Input interface with 20 public fields or methods. |
+| `ContextBuildRequest` | interface | <code>interface ContextBuildRequest</code> | Context Build Request interface with 17 public fields or methods. |
+| `ContextBundle` | interface | <code>interface ContextBundle</code> | Context Bundle interface with 16 public fields or methods. |
+| `ContextCompactionPolicySpec` | interface | <code>interface ContextCompactionPolicySpec</code> | Context Compaction Policy Spec interface with 6 public fields or methods. |
+| `ContextConflict` | interface | <code>interface ContextConflict</code> | Context Conflict interface with 3 public fields or methods. |
+| `ContextEnvelope` | interface | <code>interface ContextEnvelope</code> | Context Envelope interface with 17 public fields or methods. |
+| `ContextInjectionGateway` | interface | <code>interface ContextInjectionGateway</code> | Context Injection Gateway interface with 1 public fields or methods. |
+| `ContextItem` | interface | <code>interface ContextItem</code> | Context Item interface with 14 public fields or methods. |
+| `ContextItemPolicyDecision` | interface | <code>interface ContextItemPolicyDecision</code> | Context Item Policy Decision interface with 2 public fields or methods. |
+| `ContextItemPolicyEvaluator` | interface | <code>interface ContextItemPolicyEvaluator</code> | Context Item Policy Evaluator interface with 1 public fields or methods. |
+| `ContextItemPolicyInput` | interface | <code>interface ContextItemPolicyInput</code> | Context Item Policy Input interface with 5 public fields or methods. |
+| `ContextProfileSpec` | interface | <code>interface ContextProfileSpec</code> | Context Profile Spec interface with 23 public fields or methods. |
+| `ContextProvenanceLabel` | interface | <code>interface ContextProvenanceLabel</code> | Context Provenance Label interface with 7 public fields or methods. |
+| `ContextRankingPolicySpec` | interface | <code>interface ContextRankingPolicySpec</code> | Context Ranking Policy Spec interface with 8 public fields or methods. |
+| `ContextRejectedItem` | interface | <code>interface ContextRejectedItem</code> | Context Rejected Item interface with 2 public fields or methods. |
+| `ContextSourceBudget` | interface | <code>interface ContextSourceBudget</code> | Context Source Budget interface with 6 public fields or methods. |
+| `ContextSourceResolutionInput` | interface | <code>interface ContextSourceResolutionInput extends ResolvedContextBuildInput</code> | Context Source Resolution Input interface with 20 public fields or methods. |
+| `ContextSourceResolver` | interface | <code>interface ContextSourceResolver</code> | Context Source Resolver interface with 3 public fields or methods. |
+| `ContextSourceResolverRegistry` | interface | <code>interface ContextSourceResolverRegistry</code> | Context Source Resolver Registry interface with 1 public fields or methods. |
+| `ContextSourceSpec` | interface | <code>interface ContextSourceSpec</code> | Context Source Spec interface with 9 public fields or methods. |
+| `ContextTruncationPolicySpec` | interface | <code>interface ContextTruncationPolicySpec</code> | Context Truncation Policy Spec interface with 5 public fields or methods. |
+| `ContextTruncationRecord` | interface | <code>interface ContextTruncationRecord</code> | Context Truncation Record interface with 5 public fields or methods. |
+| `MemoryContextBuilder` | interface | <code>interface MemoryContextBuilder</code> | Memory Context Builder interface with 2 public fields or methods. |
+| `PromptSegment` | interface | <code>interface PromptSegment</code> | Prompt Segment interface with 8 public fields or methods. |
+| `ResolvedContextBuildInput` | interface | <code>interface ResolvedContextBuildInput extends ContextBuildRequest</code> | Resolved Context Build Input interface with 19 public fields or methods. |
+| `TokenEstimator` | interface | <code>interface TokenEstimator</code> | Token Estimator interface with 2 public fields or methods. |
+| `ContextSourceType` | type | <code>type ContextSourceType = 'system' &#124; 'workflow_state' &#124; 'messages' &#124; 'working_memory' &#124; 'long_term_memory' &#124; 'tool_observation' &#124; 'artifact' &#124; 'human_review' &#124; 'custom'</code> | Public type alias for Context Source Type; the declaration contains its complete type expression. |
 
-## `ContextBudgetPlan` contract members
+## `ContextBudgetPlan`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `dynamicTokens` | property | <code>dynamicTokens: number</code> | Public dynamic Tokens property. |
-| `fixedTokens` | property | <code>fixedTokens: number</code> | Public fixed Tokens property. |
-| `safetyMarginTokens` | property | <code>safetyMarginTokens: number</code> | Public safety Margin Tokens property. |
-| `sourceBudgets` | property | <code>sourceBudgets: ContextSourceBudget[]</code> | Public source Budgets property. |
-| `tokenizerRef` | property | <code>tokenizerRef: MemoryContractSpecRef</code> | Public tokenizer Ref property. |
-| `totalAvailableTokens` | property | <code>totalAvailableTokens: number</code> | Public total Available Tokens property. |
+Context Budget Plan interface with 6 public fields or methods.
 
-## `ContextBuildExplanation` contract members
+- Kind: interface
+- Import: `import type { ContextBudgetPlan } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `budgetPlan` | property | <code>budgetPlan: ContextBudgetPlan</code> | Public budget Plan property. |
-| `contextHash` | property | <code>contextHash: string</code> | Public context Hash property. |
-| `omittedItemIds` | property | <code>omittedItemIds: string[]</code> | Public omitted Item Ids property. |
-| `ranking` | property | <code>ranking: { itemId: string; score: number; reasons: string[]; }[]</code> | Public ranking property. |
-| `rejectedItems` | property | <code>rejectedItems: ContextRejectedItem[]</code> | Public rejected Items property. |
-| `selectedItemIds` | property | <code>selectedItemIds: string[]</code> | Public selected Item Ids property. |
+### Declaration
 
-## `ContextBuildInput` contract members
+```text
+export interface ContextBudgetPlan {
+    totalAvailableTokens: number;
+    fixedTokens: number;
+    dynamicTokens: number;
+    sourceBudgets: ContextSourceBudget[];
+    tokenizerRef: MemoryContractSpecRef;
+    safetyMarginTokens: number;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `explicitSourceRefs` | property | <code>explicitSourceRefs: string[]</code> | Public explicit Source Refs property. |
-| `messageCursor` | property | <code>messageCursor: string</code> | Public message Cursor property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public model Context Window Tokens property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `previousContextHash` | property | <code>previousContextHash: string</code> | Public previous Context Hash property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profile` | property | <code>profile: ContextProfileSpec</code> | Public profile property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `query` | property | <code>query: string</code> | Public query property. |
-| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public reserved Instruction Tokens property. |
-| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public reserved Output Tokens property. |
-| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public reserved System Tokens property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `runtimeStateRef` | property | <code>runtimeStateRef: string</code> | Public runtime State Ref property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-| `sourceItems` | property | <code>sourceItems: ContextItem[]</code> | Public source Items property. |
-| `stateId` | property | <code>stateId: string</code> | Public state Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `tokenizerRef` | property | <code>tokenizerRef: MemoryContractSpecRef</code> | Public tokenizer Ref property. |
-
-## `ContextBuildRequest` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `explicitSourceRefs` | property | <code>explicitSourceRefs: string[]</code> | Public explicit Source Refs property. |
-| `messageCursor` | property | <code>messageCursor: string</code> | Public message Cursor property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public model Context Window Tokens property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `previousContextHash` | property | <code>previousContextHash: string</code> | Public previous Context Hash property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `query` | property | <code>query: string</code> | Public query property. |
-| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public reserved Instruction Tokens property. |
-| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public reserved Output Tokens property. |
-| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public reserved System Tokens property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `runtimeStateRef` | property | <code>runtimeStateRef: string</code> | Public runtime State Ref property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-| `stateId` | property | <code>stateId: string</code> | Public state Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
+| `dynamicTokens` | property | <code>dynamicTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `fixedTokens` | property | <code>fixedTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `safetyMarginTokens` | property | <code>safetyMarginTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceBudgets` | property | <code>sourceBudgets: ContextSourceBudget[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenizerRef` | property | <code>tokenizerRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `totalAvailableTokens` | property | <code>totalAvailableTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextBundle` contract members
+## `ContextBuildExplanation`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `artifactRefs` | property | <code>artifactRefs: ContextArtifactRef[]</code> | Public artifact Refs property. |
-| `conflicts` | property | <code>conflicts: ContextConflict[]</code> | Public conflicts property. |
-| `contextHash` | property | <code>contextHash: string</code> | Public context Hash property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `items` | property | <code>items: ContextItem[]</code> | Public items property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `omittedItemIds` | property | <code>omittedItemIds: string[]</code> | Public omitted Item Ids property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `profileRevision` | property | <code>profileRevision: string</code> | Public profile Revision property. |
-| `rejectedItems` | property | <code>rejectedItems: ContextRejectedItem[]</code> | Public rejected Items property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sourceHashes` | property | <code>sourceHashes: Record&lt;string, string&gt;</code> | Public source Hashes property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `totalCharacters` | property | <code>totalCharacters: number</code> | Public total Characters property. |
-| `totalTokens` | property | <code>totalTokens: number</code> | Public total Tokens property. |
+Context Build Explanation interface with 6 public fields or methods.
 
-## `ContextCompactionPolicySpec` contract members
+- Kind: interface
+- Import: `import type { ContextBuildExplanation } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextBuildExplanation {
+    contextHash: string;
+    selectedItemIds: string[];
+    omittedItemIds: string[];
+    rejectedItems: ContextRejectedItem[];
+    ranking: Array<{
+        itemId: string;
+        score: number;
+        reasons: string[];
+    }>;
+    budgetPlan: ContextBudgetPlan;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `enabled` | property | <code>enabled: boolean</code> | Public enabled property. |
-| `persistSummaryAsMemory` | property | <code>persistSummaryAsMemory: boolean</code> | Public persist Summary As Memory property. |
-| `preserveLastMessages` | property | <code>preserveLastMessages: number</code> | Public preserve Last Messages property. |
-| `summaryMemoryType` | property | <code>summaryMemoryType: import("/Users/erwin/Downloads/codespace/Hypha/packages/memory/dist/contracts").ManagedMemoryType</code> | Public summary Memory Type property. |
-| `summaryProviderRef` | property | <code>summaryProviderRef: MemoryContractSpecRef</code> | Public summary Provider Ref property. |
-| `triggerRatio` | property | <code>triggerRatio: number</code> | Public trigger Ratio property. |
+| `budgetPlan` | property | <code>budgetPlan: ContextBudgetPlan</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextHash` | property | <code>contextHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `omittedItemIds` | property | <code>omittedItemIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ranking` | property | <code>ranking: { itemId: string; score: number; reasons: string[]; }[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rejectedItems` | property | <code>rejectedItems: ContextRejectedItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `selectedItemIds` | property | <code>selectedItemIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextConflict` contract members
+## `ContextBuildInput`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `conflictGroupId` | property | <code>conflictGroupId: string</code> | Public conflict Group Id property. |
-| `itemIds` | property | <code>itemIds: string[]</code> | Public item Ids property. |
-| `resolution` | property | <code>resolution: string</code> | Public resolution property. |
+Context Build Input interface with 20 public fields or methods.
 
-## `ContextEnvelope` contract members
+- Kind: interface
+- Import: `import type { ContextBuildInput } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `artifactRefs` | property | <code>artifactRefs: ContextArtifactRef[]</code> | Public artifact Refs property. |
-| `budgetPlan` | property | <code>budgetPlan: ContextBudgetPlan</code> | Public budget Plan property. |
-| `conflicts` | property | <code>conflicts: ContextConflict[]</code> | Public conflicts property. |
-| `contextHash` | property | <code>contextHash: string</code> | Public context Hash property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `dataSegments` | property | <code>dataSegments: PromptSegment[]</code> | Public data Segments property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `includedSourceRefs` | property | <code>includedSourceRefs: string[]</code> | Public included Source Refs property. |
-| `instructionSegments` | property | <code>instructionSegments: PromptSegment[]</code> | Public instruction Segments property. |
-| `omittedSourceRefs` | property | <code>omittedSourceRefs: string[]</code> | Public omitted Source Refs property. |
-| `profileRevision` | property | <code>profileRevision: string</code> | Public profile Revision property. |
-| `provenanceIndex` | property | <code>provenanceIndex: Record&lt;string, ContextProvenanceLabel&gt;</code> | Public provenance Index property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `systemSegments` | property | <code>systemSegments: PromptSegment[]</code> | Public system Segments property. |
-| `totalTokens` | property | <code>totalTokens: number</code> | Public total Tokens property. |
-| `truncationRecords` | property | <code>truncationRecords: ContextTruncationRecord[]</code> | Public truncation Records property. |
+### Declaration
 
-## `ContextInjectionGateway` contract members
+```text
+export interface ContextBuildInput extends ContextBuildRequest {
+    profile: ContextProfileSpec;
+    sourceItems: ContextItem[];
+    tokenizerRef?: MemoryContractSpecRef;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `buildEnvelope` | method | <code>buildEnvelope(bundle: ContextBundle, profile: ContextProfileSpec): Promise&lt;ContextEnvelope&gt;</code> | Builds Envelope at this module boundary. |
+| `explicitSourceRefs` | property | <code>explicitSourceRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messageCursor` | property | <code>messageCursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `previousContextHash` | property | <code>previousContextHash?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profile` | property | <code>profile: ContextProfileSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `query` | property | <code>query?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runtimeStateRef` | property | <code>runtimeStateRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceItems` | property | <code>sourceItems: ContextItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stateId` | property | <code>stateId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenizerRef` | property | <code>tokenizerRef?: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextItem` contract members
+## `ContextBuildRequest`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `artifactRef` | property | <code>artifactRef: ContextArtifactRef</code> | Public artifact Ref property. |
-| `conflictGroupId` | property | <code>conflictGroupId: string</code> | Public conflict Group Id property. |
-| `content` | property | <code>content: unknown</code> | Public content property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `priority` | property | <code>priority: number</code> | Public priority property. |
-| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt; &#124; MemoryProvenance</code> | Public provenance property. |
-| `required` | property | <code>required: boolean</code> | Public required property. |
-| `score` | property | <code>score: number</code> | Public score property. |
-| `sourceId` | property | <code>sourceId: string</code> | Public source Id property. |
-| `sourceType` | property | <code>sourceType: ContextSourceType</code> | Public source Type property. |
-| `text` | property | <code>text: string</code> | Public text property. |
-| `tokenEstimate` | property | <code>tokenEstimate: number</code> | Public token Estimate property. |
-| `untrusted` | property | <code>untrusted: boolean</code> | Public untrusted property. |
+Context Build Request interface with 17 public fields or methods.
 
-## `ContextItemPolicyDecision` contract members
+- Kind: interface
+- Import: `import type { ContextBuildRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `allowed` | property | <code>allowed: boolean</code> | Public allowed property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
+### Declaration
 
-## `ContextItemPolicyEvaluator` contract members
+```text
+export interface ContextBuildRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    runId: string;
+    stepId?: string;
+    stateId?: string;
+    profileRef: MemoryContractSpecRef;
+    modelContextWindowTokens: number;
+    reservedSystemTokens: number;
+    reservedInstructionTokens: number;
+    reservedOutputTokens: number;
+    runtimeStateRef?: string;
+    messageCursor?: string;
+    explicitSourceRefs?: string[];
+    query?: string;
+    previousContextHash?: string;
+    metadata?: Record<string, unknown>;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `evaluate` | method | <code>evaluate(input: ContextItemPolicyInput): Promise&lt;ContextItemPolicyDecision&gt;</code> | Evaluates evaluate at this module boundary. |
-
-## `ContextItemPolicyInput` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `item` | property | <code>item: ContextItem</code> | Public item property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-
-## `ContextProfileSpec` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `compactionPolicy` | property | <code>compactionPolicy: ContextCompactionPolicySpec</code> | Public compaction Policy property. |
-| `conflictPolicy` | property | <code>conflictPolicy: "include_marked" &#124; "prefer_latest" &#124; "prefer_verified"</code> | Public conflict Policy property. |
-| `deduplication` | property | <code>deduplication: "none" &#124; "id" &#124; "semantic" &#124; "hash"</code> | Public deduplication property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `includeProvenance` | property | <code>includeProvenance: boolean</code> | Public include Provenance property. |
-| `includeScores` | property | <code>includeScores: boolean</code> | Public include Scores property. |
-| `instructionBoundary` | property | <code>instructionBoundary: "strict" &#124; "tagged" &#124; "quoted"</code> | Public instruction Boundary property. |
-| `maxCharacters` | property | <code>maxCharacters: number</code> | Public max Characters property. |
-| `maxItems` | property | <code>maxItems: number</code> | Public max Items property. |
-| `maxSerializedBytes` | property | <code>maxSerializedBytes: number</code> | Public max Serialized Bytes property. |
-| `maxTokens` | property | <code>maxTokens: number</code> | Public max Tokens property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `ranking` | property | <code>ranking: ContextRankingPolicySpec</code> | Public ranking property. |
-| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public reserved Output Tokens property. |
-| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public reserved System Tokens property. |
-| `revision` | property | <code>revision: string</code> | Public revision property. |
-| `semanticDedupThreshold` | property | <code>semanticDedupThreshold: number</code> | Public semantic Dedup Threshold property. |
-| `sources` | property | <code>sources: ContextSourceSpec[]</code> | Public sources property. |
-| `truncation` | property | <code>truncation: ContextTruncationPolicySpec</code> | Public truncation property. |
-| `untrustedContentPolicy` | property | <code>untrustedContentPolicy: "reject" &#124; "escape" &#124; "tag"</code> | Public untrusted Content Policy property. |
-| `version` | property | <code>version: string</code> | Public version property. |
-
-## `ContextProvenanceLabel` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `authority` | property | <code>authority: "verified" &#124; "unverified" &#124; "user_asserted" &#124; "system_observed" &#124; "authoritative"</code> | Public authority property. |
-| `citationLabel` | property | <code>citationLabel: string</code> | Public citation Label property. |
-| `memoryId` | property | <code>memoryId: string</code> | Public memory Id property. |
-| `memoryVersionId` | property | <code>memoryVersionId: string</code> | Public memory Version Id property. |
-| `observedAt` | property | <code>observedAt: string</code> | Public observed At property. |
-| `sourceId` | property | <code>sourceId: string</code> | Public source Id property. |
-| `sourceType` | property | <code>sourceType: ContextSourceType</code> | Public source Type property. |
+| `explicitSourceRefs` | property | <code>explicitSourceRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messageCursor` | property | <code>messageCursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `previousContextHash` | property | <code>previousContextHash?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `query` | property | <code>query?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runtimeStateRef` | property | <code>runtimeStateRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stateId` | property | <code>stateId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextRankingPolicySpec` contract members
+## `ContextBundle`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `confidenceWeight` | property | <code>confidenceWeight: number</code> | Public confidence Weight property. |
-| `importanceWeight` | property | <code>importanceWeight: number</code> | Public importance Weight property. |
-| `method` | property | <code>method: "custom" &#124; "priority" &#124; "score_fusion" &#124; "reranker"</code> | Public method property. |
-| `provenanceWeight` | property | <code>provenanceWeight: number</code> | Public provenance Weight property. |
-| `recencyWeight` | property | <code>recencyWeight: number</code> | Public recency Weight property. |
-| `relevanceWeight` | property | <code>relevanceWeight: number</code> | Public relevance Weight property. |
-| `rerankerProviderRef` | property | <code>rerankerProviderRef: MemoryContractSpecRef</code> | Public reranker Provider Ref property. |
-| `sourceWeights` | property | <code>sourceWeights: Record&lt;string, number&gt;</code> | Public source Weights property. |
+Context Bundle interface with 16 public fields or methods.
 
-## `ContextRejectedItem` contract members
+- Kind: interface
+- Import: `import type { ContextBundle } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `itemId` | property | <code>itemId: string</code> | Public item Id property. |
-| `reason` | property | <code>reason: "policy_denied" &#124; "duplicate" &#124; "scope_denied" &#124; "invalid_status" &#124; "budget_exceeded" &#124; "untrusted_rejected" &#124; "invalid_input"</code> | Public reason property. |
+### Declaration
 
-## `ContextSourceBudget` contract members
+```text
+export interface ContextBundle {
+    id: string;
+    runId: string;
+    stepId?: string;
+    profileRef: MemoryContractSpecRef;
+    profileRevision: string;
+    items: ContextItem[];
+    totalTokens: number;
+    totalCharacters: number;
+    omittedItemIds: string[];
+    rejectedItems: ContextRejectedItem[];
+    conflicts: ContextConflict[];
+    sourceHashes: Record<string, string>;
+    contextHash: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+    artifactRefs?: ContextArtifactRef[];
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `maxTokens` | property | <code>maxTokens: number</code> | Public max Tokens property. |
-| `minTokens` | property | <code>minTokens: number</code> | Public min Tokens property. |
-| `overflowPolicy` | property | <code>overflowPolicy: "fail" &#124; "summarize" &#124; "drop" &#124; "truncate" &#124; "spill_to_artifact"</code> | Public overflow Policy property. |
-| `required` | property | <code>required: boolean</code> | Public required property. |
-| `sourceId` | property | <code>sourceId: string</code> | Public source Id property. |
-| `targetTokens` | property | <code>targetTokens: number</code> | Public target Tokens property. |
-
-## `ContextSourceResolutionInput` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `explicitSourceRefs` | property | <code>explicitSourceRefs: string[]</code> | Public explicit Source Refs property. |
-| `messageCursor` | property | <code>messageCursor: string</code> | Public message Cursor property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public model Context Window Tokens property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `previousContextHash` | property | <code>previousContextHash: string</code> | Public previous Context Hash property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profile` | property | <code>profile: ContextProfileSpec</code> | Public profile property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `query` | property | <code>query: string</code> | Public query property. |
-| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public reserved Instruction Tokens property. |
-| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public reserved Output Tokens property. |
-| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public reserved System Tokens property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `runtimeStateRef` | property | <code>runtimeStateRef: string</code> | Public runtime State Ref property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-| `source` | property | <code>source: ContextSourceSpec</code> | Public source property. |
-| `stateId` | property | <code>stateId: string</code> | Public state Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `tokenizerRef` | property | <code>tokenizerRef: MemoryContractSpecRef</code> | Public tokenizer Ref property. |
-
-## `ContextSourceResolver` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `resolve` | method | <code>resolve(request: ContextSourceResolutionInput): Promise&lt;ContextItem[]&gt;</code> | Resolves resolve at this module boundary. |
-| `supports` | method | <code>supports(source: ContextSourceSpec): boolean</code> | Public runtime operation for supports. |
+| `artifactRefs` | property | <code>artifactRefs?: ContextArtifactRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `conflicts` | property | <code>conflicts: ContextConflict[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextHash` | property | <code>contextHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `items` | property | <code>items: ContextItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `omittedItemIds` | property | <code>omittedItemIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRevision` | property | <code>profileRevision: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rejectedItems` | property | <code>rejectedItems: ContextRejectedItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceHashes` | property | <code>sourceHashes: Record&lt;string, string&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `totalCharacters` | property | <code>totalCharacters: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `totalTokens` | property | <code>totalTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextSourceResolverRegistry` contract members
+## `ContextCompactionPolicySpec`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `resolve` | method | <code>resolve(request: ResolvedContextBuildInput): Promise&lt;ContextItem[]&gt;</code> | Resolves resolve at this module boundary. |
+Context Compaction Policy Spec interface with 6 public fields or methods.
 
-## `ContextSourceSpec` contract members
+- Kind: interface
+- Import: `import type { ContextCompactionPolicySpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `filters` | property | <code>filters: Record&lt;string, unknown&gt;</code> | Public filters property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `maxItems` | property | <code>maxItems: number</code> | Public max Items property. |
-| `maxTokens` | property | <code>maxTokens: number</code> | Public max Tokens property. |
-| `overflowPolicy` | property | <code>overflowPolicy: "fail" &#124; "summarize" &#124; "drop" &#124; "truncate" &#124; "spill_to_artifact"</code> | Public overflow Policy property. |
-| `priority` | property | <code>priority: number</code> | Public priority property. |
-| `ref` | property | <code>ref: MemoryContractSpecRef</code> | Public ref property. |
-| `required` | property | <code>required: boolean</code> | Public required property. |
-| `type` | property | <code>type: ContextSourceType</code> | Public type property. |
+### Declaration
 
-## `ContextTruncationPolicySpec` contract members
+```text
+export interface ContextCompactionPolicySpec {
+    enabled: boolean;
+    triggerRatio: number;
+    summaryProviderRef?: MemoryContractSpecRef;
+    preserveLastMessages?: number;
+    persistSummaryAsMemory?: boolean;
+    summaryMemoryType?: import('./contracts').ManagedMemoryType;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `method` | property | <code>method: "hybrid" &#124; "summarize" &#124; "drop_lowest" &#124; "truncate_items"</code> | Public method property. |
-| `minItemTokens` | property | <code>minItemTokens: number</code> | Public min Item Tokens property. |
-| `preserveLatestMessages` | property | <code>preserveLatestMessages: number</code> | Public preserve Latest Messages property. |
-| `preserveRequiredSources` | property | <code>preserveRequiredSources: boolean</code> | Public preserve Required Sources property. |
-| `truncationMarker` | property | <code>truncationMarker: string</code> | Public truncation Marker property. |
-
-## `ContextTruncationRecord` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `itemId` | property | <code>itemId: string</code> | Public item Id property. |
-| `method` | property | <code>method: "summarize" &#124; "drop" &#124; "truncate" &#124; "spill_to_artifact"</code> | Public method property. |
-| `originalTokens` | property | <code>originalTokens: number</code> | Public original Tokens property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `retainedTokens` | property | <code>retainedTokens: number</code> | Public retained Tokens property. |
-
-## `MemoryContextBuilder` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `build` | method | <code>build(request: ContextBuildInput): Promise&lt;ContextBundle&gt;</code> | Builds build at this module boundary. |
-| `explain` | method | <code>explain(contextHash: string): Promise&lt;ContextBuildExplanation &#124; null&gt;</code> | Public runtime operation for explain. |
+| `enabled` | property | <code>enabled: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `persistSummaryAsMemory` | property | <code>persistSummaryAsMemory?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `preserveLastMessages` | property | <code>preserveLastMessages?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `summaryMemoryType` | property | <code>summaryMemoryType?: import("/Users/erwin/Downloads/codespace/Hypha/packages/memory/dist/contracts").ManagedMemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `summaryProviderRef` | property | <code>summaryProviderRef?: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `triggerRatio` | property | <code>triggerRatio: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PromptSegment` contract members
+## `ContextConflict`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `artifactRefs` | property | <code>artifactRefs: ContextArtifactRef[]</code> | Public artifact Refs property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `required` | property | <code>required: boolean</code> | Public required property. |
-| `role` | property | <code>role: "system" &#124; "tool" &#124; "user" &#124; "assistant" &#124; "developer" &#124; "data"</code> | Public role property. |
-| `sourceRefs` | property | <code>sourceRefs: string[]</code> | Public source Refs property. |
-| `text` | property | <code>text: string</code> | Public text property. |
-| `tokenCount` | property | <code>tokenCount: number</code> | Public token Count property. |
-| `trustLevel` | property | <code>trustLevel: "trusted_instruction" &#124; "trusted_data" &#124; "untrusted_data"</code> | Public trust Level property. |
+Context Conflict interface with 3 public fields or methods.
 
-## `ResolvedContextBuildInput` contract members
+- Kind: interface
+- Import: `import type { ContextConflict } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `explicitSourceRefs` | property | <code>explicitSourceRefs: string[]</code> | Public explicit Source Refs property. |
-| `messageCursor` | property | <code>messageCursor: string</code> | Public message Cursor property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public model Context Window Tokens property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `previousContextHash` | property | <code>previousContextHash: string</code> | Public previous Context Hash property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profile` | property | <code>profile: ContextProfileSpec</code> | Public profile property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `query` | property | <code>query: string</code> | Public query property. |
-| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public reserved Instruction Tokens property. |
-| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public reserved Output Tokens property. |
-| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public reserved System Tokens property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `runtimeStateRef` | property | <code>runtimeStateRef: string</code> | Public runtime State Ref property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-| `stateId` | property | <code>stateId: string</code> | Public state Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `tokenizerRef` | property | <code>tokenizerRef: MemoryContractSpecRef</code> | Public tokenizer Ref property. |
+### Declaration
 
-## `TokenEstimator` contract members
+```text
+export interface ContextConflict {
+    conflictGroupId: string;
+    itemIds: string[];
+    resolution?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `estimate` | method | <code>estimate(text: string): number</code> | Public runtime operation for estimate. |
-| `id` | property | <code>id: string</code> | Public id property. |
+| `conflictGroupId` | property | <code>conflictGroupId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `itemIds` | property | <code>itemIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolution` | property | <code>resolution?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextEnvelope`
+
+Context Envelope interface with 17 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextEnvelope } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextEnvelope {
+    id: string;
+    runId: string;
+    stepId?: string;
+    contextHash: string;
+    profileRevision: string;
+    budgetPlan: ContextBudgetPlan;
+    systemSegments: PromptSegment[];
+    instructionSegments: PromptSegment[];
+    dataSegments: PromptSegment[];
+    includedSourceRefs: string[];
+    omittedSourceRefs: string[];
+    truncationRecords: ContextTruncationRecord[];
+    provenanceIndex: Record<string, ContextProvenanceLabel>;
+    conflicts: ContextConflict[];
+    totalTokens: number;
+    createdAt: string;
+    artifactRefs?: ContextArtifactRef[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `artifactRefs` | property | <code>artifactRefs?: ContextArtifactRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `budgetPlan` | property | <code>budgetPlan: ContextBudgetPlan</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `conflicts` | property | <code>conflicts: ContextConflict[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextHash` | property | <code>contextHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `dataSegments` | property | <code>dataSegments: PromptSegment[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includedSourceRefs` | property | <code>includedSourceRefs: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `instructionSegments` | property | <code>instructionSegments: PromptSegment[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `omittedSourceRefs` | property | <code>omittedSourceRefs: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRevision` | property | <code>profileRevision: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenanceIndex` | property | <code>provenanceIndex: Record&lt;string, ContextProvenanceLabel&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `systemSegments` | property | <code>systemSegments: PromptSegment[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `totalTokens` | property | <code>totalTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `truncationRecords` | property | <code>truncationRecords: ContextTruncationRecord[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextInjectionGateway`
+
+Context Injection Gateway interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextInjectionGateway } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextInjectionGateway {
+    buildEnvelope(bundle: ContextBundle, profile: ContextProfileSpec): Promise<ContextEnvelope>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `buildEnvelope` | method | <code>buildEnvelope(bundle: ContextBundle, profile: ContextProfileSpec): Promise&lt;ContextEnvelope&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ContextItem`
+
+Context Item interface with 14 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextItem } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextItem {
+    id: string;
+    sourceType: ContextSourceType;
+    sourceId?: string;
+    content: unknown;
+    text: string;
+    tokenEstimate: number;
+    priority: number;
+    score?: number;
+    required?: boolean;
+    untrusted?: boolean;
+    provenance?: MemoryProvenance | Record<string, unknown>;
+    conflictGroupId?: string;
+    metadata?: Record<string, unknown>;
+    artifactRef?: ContextArtifactRef;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `artifactRef` | property | <code>artifactRef?: ContextArtifactRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `conflictGroupId` | property | <code>conflictGroupId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `content` | property | <code>content: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `priority` | property | <code>priority: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenance` | property | <code>provenance?: Record&lt;string, unknown&gt; &#124; MemoryProvenance</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `required` | property | <code>required?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `score` | property | <code>score?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceId` | property | <code>sourceId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceType` | property | <code>sourceType: ContextSourceType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `text` | property | <code>text: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenEstimate` | property | <code>tokenEstimate: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `untrusted` | property | <code>untrusted?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextItemPolicyDecision`
+
+Context Item Policy Decision interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextItemPolicyDecision } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextItemPolicyDecision {
+    allowed: boolean;
+    reason?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowed` | property | <code>allowed: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextItemPolicyEvaluator`
+
+Context Item Policy Evaluator interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextItemPolicyEvaluator } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextItemPolicyEvaluator {
+    evaluate(input: ContextItemPolicyInput): Promise<ContextItemPolicyDecision>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `evaluate` | method | <code>evaluate(input: ContextItemPolicyInput): Promise&lt;ContextItemPolicyDecision&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ContextItemPolicyInput`
+
+Context Item Policy Input interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextItemPolicyInput } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextItemPolicyInput {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    profileRef: MemoryContractSpecRef;
+    item: ContextItem;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `item` | property | <code>item: ContextItem</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextProfileSpec`
+
+Context Profile Spec interface with 23 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextProfileSpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextProfileSpec {
+    id: string;
+    version: string;
+    revision?: string;
+    name?: string;
+    description?: string;
+    sources: ContextSourceSpec[];
+    maxItems?: number;
+    maxCharacters?: number;
+    maxSerializedBytes?: number;
+    maxTokens: number;
+    reservedOutputTokens?: number;
+    reservedSystemTokens?: number;
+    deduplication: 'none' | 'id' | 'hash' | 'semantic';
+    semanticDedupThreshold?: number;
+    ranking: ContextRankingPolicySpec;
+    truncation: ContextTruncationPolicySpec;
+    conflictPolicy?: 'include_marked' | 'prefer_latest' | 'prefer_verified';
+    includeProvenance: boolean;
+    includeScores?: boolean;
+    instructionBoundary: 'strict' | 'tagged' | 'quoted';
+    untrustedContentPolicy: 'escape' | 'tag' | 'reject';
+    compactionPolicy?: ContextCompactionPolicySpec;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `compactionPolicy` | property | <code>compactionPolicy?: ContextCompactionPolicySpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `conflictPolicy` | property | <code>conflictPolicy?: "include_marked" &#124; "prefer_latest" &#124; "prefer_verified"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deduplication` | property | <code>deduplication: "none" &#124; "id" &#124; "semantic" &#124; "hash"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeProvenance` | property | <code>includeProvenance: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeScores` | property | <code>includeScores?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `instructionBoundary` | property | <code>instructionBoundary: "strict" &#124; "tagged" &#124; "quoted"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxCharacters` | property | <code>maxCharacters?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxItems` | property | <code>maxItems?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxSerializedBytes` | property | <code>maxSerializedBytes?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxTokens` | property | <code>maxTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ranking` | property | <code>ranking: ContextRankingPolicySpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedOutputTokens` | property | <code>reservedOutputTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedSystemTokens` | property | <code>reservedSystemTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `revision` | property | <code>revision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `semanticDedupThreshold` | property | <code>semanticDedupThreshold?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sources` | property | <code>sources: ContextSourceSpec[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `truncation` | property | <code>truncation: ContextTruncationPolicySpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `untrustedContentPolicy` | property | <code>untrustedContentPolicy: "reject" &#124; "escape" &#124; "tag"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextProvenanceLabel`
+
+Context Provenance Label interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextProvenanceLabel } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextProvenanceLabel {
+    sourceType: ContextSourceType;
+    sourceId: string;
+    memoryId?: string;
+    memoryVersionId?: string;
+    authority?: 'unverified' | 'user_asserted' | 'system_observed' | 'verified' | 'authoritative';
+    observedAt?: string;
+    citationLabel: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `authority` | property | <code>authority?: "verified" &#124; "unverified" &#124; "user_asserted" &#124; "system_observed" &#124; "authoritative"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `citationLabel` | property | <code>citationLabel: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryId` | property | <code>memoryId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryVersionId` | property | <code>memoryVersionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `observedAt` | property | <code>observedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceId` | property | <code>sourceId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceType` | property | <code>sourceType: ContextSourceType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextRankingPolicySpec`
+
+Context Ranking Policy Spec interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextRankingPolicySpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextRankingPolicySpec {
+    method: 'priority' | 'score_fusion' | 'reranker' | 'custom';
+    recencyWeight?: number;
+    relevanceWeight?: number;
+    importanceWeight?: number;
+    confidenceWeight?: number;
+    provenanceWeight?: number;
+    sourceWeights?: Record<string, number>;
+    rerankerProviderRef?: MemoryContractSpecRef;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `confidenceWeight` | property | <code>confidenceWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `importanceWeight` | property | <code>importanceWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `method` | property | <code>method: "custom" &#124; "priority" &#124; "score_fusion" &#124; "reranker"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenanceWeight` | property | <code>provenanceWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `recencyWeight` | property | <code>recencyWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `relevanceWeight` | property | <code>relevanceWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rerankerProviderRef` | property | <code>rerankerProviderRef?: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceWeights` | property | <code>sourceWeights?: Record&lt;string, number&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextRejectedItem`
+
+Context Rejected Item interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextRejectedItem } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextRejectedItem {
+    itemId: string;
+    reason: 'scope_denied' | 'policy_denied' | 'invalid_status' | 'duplicate' | 'budget_exceeded' | 'untrusted_rejected' | 'invalid_input';
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `itemId` | property | <code>itemId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: "policy_denied" &#124; "duplicate" &#124; "scope_denied" &#124; "invalid_status" &#124; "budget_exceeded" &#124; "untrusted_rejected" &#124; "invalid_input"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextSourceBudget`
+
+Context Source Budget interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextSourceBudget } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextSourceBudget {
+    sourceId: string;
+    minTokens?: number;
+    targetTokens?: number;
+    maxTokens: number;
+    required: boolean;
+    overflowPolicy: 'drop' | 'truncate' | 'summarize' | 'spill_to_artifact' | 'fail';
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `maxTokens` | property | <code>maxTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `minTokens` | property | <code>minTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `overflowPolicy` | property | <code>overflowPolicy: "fail" &#124; "summarize" &#124; "drop" &#124; "truncate" &#124; "spill_to_artifact"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `required` | property | <code>required: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceId` | property | <code>sourceId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `targetTokens` | property | <code>targetTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextSourceResolutionInput`
+
+Context Source Resolution Input interface with 20 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextSourceResolutionInput } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextSourceResolutionInput extends ResolvedContextBuildInput {
+    source: ContextSourceSpec;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `explicitSourceRefs` | property | <code>explicitSourceRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messageCursor` | property | <code>messageCursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `previousContextHash` | property | <code>previousContextHash?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profile` | property | <code>profile: ContextProfileSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `query` | property | <code>query?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runtimeStateRef` | property | <code>runtimeStateRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `source` | property | <code>source: ContextSourceSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stateId` | property | <code>stateId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenizerRef` | property | <code>tokenizerRef?: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextSourceResolver`
+
+Context Source Resolver interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextSourceResolver } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextSourceResolver {
+    readonly id: string;
+    supports(source: ContextSourceSpec): boolean;
+    resolve(request: ContextSourceResolutionInput): Promise<ContextItem[]>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolve` | method | <code>resolve(request: ContextSourceResolutionInput): Promise&lt;ContextItem[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `supports` | method | <code>supports(source: ContextSourceSpec): boolean</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ContextSourceResolverRegistry`
+
+Context Source Resolver Registry interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextSourceResolverRegistry } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextSourceResolverRegistry {
+    resolve(request: ResolvedContextBuildInput): Promise<ContextItem[]>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `resolve` | method | <code>resolve(request: ResolvedContextBuildInput): Promise&lt;ContextItem[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ContextSourceSpec`
+
+Context Source Spec interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextSourceSpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextSourceSpec {
+    id: string;
+    type: ContextSourceType;
+    ref?: MemoryContractSpecRef;
+    required?: boolean;
+    priority: number;
+    maxItems?: number;
+    maxTokens?: number;
+    overflowPolicy?: ContextSourceBudget['overflowPolicy'];
+    filters?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `filters` | property | <code>filters?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxItems` | property | <code>maxItems?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxTokens` | property | <code>maxTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `overflowPolicy` | property | <code>overflowPolicy?: "fail" &#124; "summarize" &#124; "drop" &#124; "truncate" &#124; "spill_to_artifact"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `priority` | property | <code>priority: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ref` | property | <code>ref?: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `required` | property | <code>required?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: ContextSourceType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextTruncationPolicySpec`
+
+Context Truncation Policy Spec interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextTruncationPolicySpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextTruncationPolicySpec {
+    method: 'drop_lowest' | 'truncate_items' | 'summarize' | 'hybrid';
+    preserveRequiredSources: boolean;
+    preserveLatestMessages?: number;
+    minItemTokens?: number;
+    truncationMarker?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `method` | property | <code>method: "hybrid" &#124; "summarize" &#124; "drop_lowest" &#124; "truncate_items"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `minItemTokens` | property | <code>minItemTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `preserveLatestMessages` | property | <code>preserveLatestMessages?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `preserveRequiredSources` | property | <code>preserveRequiredSources: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `truncationMarker` | property | <code>truncationMarker?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextTruncationRecord`
+
+Context Truncation Record interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextTruncationRecord } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ContextTruncationRecord {
+    itemId: string;
+    originalTokens: number;
+    retainedTokens: number;
+    method: 'drop' | 'truncate' | 'summarize' | 'spill_to_artifact';
+    reason: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `itemId` | property | <code>itemId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `method` | property | <code>method: "summarize" &#124; "drop" &#124; "truncate" &#124; "spill_to_artifact"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `originalTokens` | property | <code>originalTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retainedTokens` | property | <code>retainedTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryContextBuilder`
+
+Memory Context Builder interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryContextBuilder } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface MemoryContextBuilder {
+    build(request: ContextBuildInput): Promise<ContextBundle>;
+    explain(contextHash: string): Promise<ContextBuildExplanation | null>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `build` | method | <code>build(request: ContextBuildInput): Promise&lt;ContextBundle&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `explain` | method | <code>explain(contextHash: string): Promise&lt;ContextBuildExplanation &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `PromptSegment`
+
+Prompt Segment interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PromptSegment } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface PromptSegment {
+    id: string;
+    role: 'system' | 'developer' | 'user' | 'assistant' | 'tool' | 'data';
+    text: string;
+    tokenCount: number;
+    trustLevel: 'trusted_instruction' | 'trusted_data' | 'untrusted_data';
+    sourceRefs: string[];
+    required?: boolean;
+    artifactRefs?: ContextArtifactRef[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `artifactRefs` | property | <code>artifactRefs?: ContextArtifactRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `required` | property | <code>required?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `role` | property | <code>role: "system" &#124; "tool" &#124; "user" &#124; "assistant" &#124; "developer" &#124; "data"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceRefs` | property | <code>sourceRefs: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `text` | property | <code>text: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenCount` | property | <code>tokenCount: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `trustLevel` | property | <code>trustLevel: "trusted_instruction" &#124; "trusted_data" &#124; "untrusted_data"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ResolvedContextBuildInput`
+
+Resolved Context Build Input interface with 19 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ResolvedContextBuildInput } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface ResolvedContextBuildInput extends ContextBuildRequest {
+    profile: ContextProfileSpec;
+    tokenizerRef?: MemoryContractSpecRef;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `explicitSourceRefs` | property | <code>explicitSourceRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messageCursor` | property | <code>messageCursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelContextWindowTokens` | property | <code>modelContextWindowTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `previousContextHash` | property | <code>previousContextHash?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profile` | property | <code>profile: ContextProfileSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `query` | property | <code>query?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedInstructionTokens` | property | <code>reservedInstructionTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedOutputTokens` | property | <code>reservedOutputTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reservedSystemTokens` | property | <code>reservedSystemTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runtimeStateRef` | property | <code>runtimeStateRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stateId` | property | <code>stateId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenizerRef` | property | <code>tokenizerRef?: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `TokenEstimator`
+
+Token Estimator interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { TokenEstimator } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export interface TokenEstimator {
+    readonly id: string;
+    estimate(text: string): number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `estimate` | method | <code>estimate(text: string): number</code> | Public method; parameters and return type are shown in the signature. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ContextSourceType`
+
+Public type alias for Context Source Type; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { ContextSourceType } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-contracts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-contracts.ts)
+
+### Declaration
+
+```text
+export type ContextSourceType = 'system' | 'workflow_state' | 'messages' | 'working_memory' | 'long_term_memory' | 'tool_observation' | 'artifact' | 'human_review' | 'custom';
+```

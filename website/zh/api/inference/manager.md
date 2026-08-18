@@ -1,78 +1,223 @@
 # `@codesoul-co/hypha-inference` / `manager`
 
 - 包索引: [`@codesoul-co/hypha-inference`](/zh/api/inference)
-- 模块指南: [学习与组合说明](/zh/packages/inference)
 - 源码: [`packages/inference/src/manager.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
 - 导出数: **6**
+
+## 模块用法
+
+用于使用该功能边界的公共契约与操作。Manager 模块公开 4 类、2 接口。
+
+### 从包入口导入
+
+```ts
+import {
+  InferenceCacheCapacityError,
+  InferenceManager,
+  InMemoryKvCacheProvider,
+  InMemoryPrefixCacheProvider,
+} from '@codesoul-co/hypha-inference';
+
+import type {
+  InMemoryKvCacheProviderOptions,
+  InMemoryPrefixCacheProviderOptions,
+} from '@codesoul-co/hypha-inference';
+```
+
+### 使用要点
+
+- 2 个类型/接口用于应用代码、Adapter 或测试中的静态契约；请使用 `import type`，运行时不应依赖它们。
+- 4 个类提供可实例化的运行时实现；构造参数与公开方法在各自条目中完整列出。
+
 
 ## 公共导出
 
 | Symbol | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `InferenceCacheCapacityError` | 类 | <code>new InferenceCacheCapacityError(message: string): InferenceCacheCapacityError</code> | Inference Cache Capacity Error 的运行时实现；公开构造函数与成员见下表。 |
-| `InferenceManager` | 类 | <code>new InferenceManager(options?: InferenceManagerOptions): InferenceManager</code> | Inference Manager 的运行时实现；公开构造函数与成员见下表。 |
-| `InMemoryKvCacheProvider` | 类 | <code>new InMemoryKvCacheProvider(options?: InMemoryKvCacheProviderOptions): InMemoryKvCacheProvider</code> | In Memory Kv Cache Provider 的运行时实现；公开构造函数与成员见下表。 |
-| `InMemoryPrefixCacheProvider` | 类 | <code>new InMemoryPrefixCacheProvider(options?: InMemoryPrefixCacheProviderOptions): InMemoryPrefixCacheProvider</code> | In Memory Prefix Cache Provider 的运行时实现；公开构造函数与成员见下表。 |
-| `InMemoryKvCacheProviderOptions` | 接口 | <code>interface InMemoryKvCacheProviderOptions</code> | In Memory Kv Cache Provider Options 的字段契约；完整字段见下表。 |
-| `InMemoryPrefixCacheProviderOptions` | 接口 | <code>interface InMemoryPrefixCacheProviderOptions</code> | In Memory Prefix Cache Provider Options 的字段契约；完整字段见下表。 |
+| `InferenceCacheCapacityError` | 类 | <code>new InferenceCacheCapacityError(message: string): InferenceCacheCapacityError</code> | Inference Cache Capacity Error 类，共公开 9 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `InferenceManager` | 类 | <code>new InferenceManager(options?: InferenceManagerOptions): InferenceManager</code> | Inference Manager 类，共公开 5 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `InMemoryKvCacheProvider` | 类 | <code>new InMemoryKvCacheProvider(options?: InMemoryKvCacheProviderOptions): InMemoryKvCacheProvider</code> | In Memory Kv Cache Provider 类，共公开 6 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `InMemoryPrefixCacheProvider` | 类 | <code>new InMemoryPrefixCacheProvider(options?: InMemoryPrefixCacheProviderOptions): InMemoryPrefixCacheProvider</code> | In Memory Prefix Cache Provider 类，共公开 5 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `InMemoryKvCacheProviderOptions` | 接口 | <code>interface InMemoryKvCacheProviderOptions</code> | In Memory Kv Cache Provider Options 接口，共包含 3 个公开字段或方法。 |
+| `InMemoryPrefixCacheProviderOptions` | 接口 | <code>interface InMemoryPrefixCacheProviderOptions</code> | In Memory Prefix Cache Provider Options 接口，共包含 3 个公开字段或方法。 |
 
-## `InferenceCacheCapacityError` 公开成员
+## `InferenceCacheCapacityError`
+
+Inference Cache Capacity Error 类，共公开 9 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { InferenceCacheCapacityError } from '@codesoul-co/hypha-inference';`
+- 源码模块: [`manager`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
+
+### 声明
+
+```text
+export declare class InferenceCacheCapacityError extends Error {
+    readonly code = "INFERENCE_CACHE_CAPACITY_EXCEEDED";
+    constructor(message: string);
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `cause` | 属性 | <code>cause: unknown</code> | cause 字段。 |
-| `code` | 属性 | <code>code: "INFERENCE_CACHE_CAPACITY_EXCEEDED"</code> | code 字段。 |
+| `cause` | 属性 | <code>cause?: unknown</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `code` | 属性 | <code>readonly code: "INFERENCE_CACHE_CAPACITY_EXCEEDED"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 | `constructor` | 构造函数 | <code>(message: string): InferenceCacheCapacityError</code> | 创建该类的实例。 |
-| `message` | 属性 | <code>message: string</code> | message 字段。 |
-| `name` | 属性 | <code>name: string</code> | name 字段。 |
-| `stack` | 属性 | <code>stack: string</code> | stack 字段。 |
-| `static captureStackTrace` | 方法 | <code>captureStackTrace(targetObject: object, constructorOpt?: Function): void</code> | Creates a `.stack` property on `targetObject`, which when accessed returns a string representing the location in the code at which `Error.captureStackTrace()` was called. ```js const myObject = {}; Error.captureStackTrace(myObject); myObject.stack; // Similar to `new Error().stack` ``` The first line of the trace will be prefixed with `${myObject.name}: ${myObject.message}`. The optional `constructorOpt` argument accepts a function. If given, all frames above `constructorOpt`, including `constructorOpt`, will be omitted from the generated stack trace. The `constructorOpt` argument is useful for hiding implementation details of error generation from the user. For instance: ```js function a() { b(); } function b() { c(); } function c() { // Create an error without stack trace to avoid calculating the stack trace twice. const { stackTraceLimit } = Error; Error.stackTraceLimit = 0; const error = new Error(); Error.stackTraceLimit = stackTraceLimit; // Capture the stack trace above function b Error.captureStackTrace(error, b); // Neither function c, nor b is included in the stack trace throw error; } a(); ``` |
-| `static prepareStackTrace` | 方法 | <code>prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any</code> | prepare Stack Trace 的公开运行时操作。 |
-| `static stackTraceLimit` | 属性 | <code>stackTraceLimit: number</code> | The `Error.stackTraceLimit` property specifies the number of stack frames collected by a stack trace (whether generated by `new Error().stack` or `Error.captureStackTrace(obj)`). The default value is `10` but may be set to any valid JavaScript number. Changes will affect any stack trace captured _after_ the value has been changed. If set to a non-number value, or set to a negative number, stack traces will not capture any frames. |
+| `message` | 属性 | <code>message: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `name` | 属性 | <code>name: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stack` | 属性 | <code>stack?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `static captureStackTrace` | 方法 | <code>static captureStackTrace(targetObject: object, constructorOpt?: Function): void</code> | Creates a `.stack` property on `targetObject`, which when accessed returns a string representing the location in the code at which `Error.captureStackTrace()` was called. ```js const myObject = {}; Error.captureStackTrace(myObject); myObject.stack; // Similar to `new Error().stack` ``` The first line of the trace will be prefixed with `${myObject.name}: ${myObject.message}`. The optional `constructorOpt` argument accepts a function. If given, all frames above `constructorOpt`, including `constructorOpt`, will be omitted from the generated stack trace. The `constructorOpt` argument is useful for hiding implementation details of error generation from the user. For instance: ```js function a() { b(); } function b() { c(); } function c() { // Create an error without stack trace to avoid calculating the stack trace twice. const { stackTraceLimit } = Error; Error.stackTraceLimit = 0; const error = new Error(); Error.stackTraceLimit = stackTraceLimit; // Capture the stack trace above function b Error.captureStackTrace(error, b); // Neither function c, nor b is included in the stack trace throw error; } a(); ``` |
+| `static prepareStackTrace` | 方法 | <code>static prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `static stackTraceLimit` | 属性 | <code>static stackTraceLimit: number</code> | The `Error.stackTraceLimit` property specifies the number of stack frames collected by a stack trace (whether generated by `new Error().stack` or `Error.captureStackTrace(obj)`). The default value is `10` but may be set to any valid JavaScript number. Changes will affect any stack trace captured _after_ the value has been changed. If set to a non-number value, or set to a negative number, stack traces will not capture any frames. |
 
-## `InferenceManager` 公开成员
+## `InferenceManager`
+
+Inference Manager 类，共公开 5 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { InferenceManager } from '@codesoul-co/hypha-inference';`
+- 源码模块: [`manager`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
+
+### 声明
+
+```text
+export declare class InferenceManager {
+    constructor(options?: InferenceManagerOptions);
+    register(provider: InferenceProvider): void;
+    get(providerId: string): InferenceProvider | null;
+    infer(providerId: string, request: InferenceRequest): Promise<InferenceResponse>;
+    stream(providerId: string, request: InferenceRequest): AsyncIterable<InferenceResponse>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(options?: InferenceManagerOptions): InferenceManager</code> | 创建该类的实例。 |
-| `get` | 方法 | <code>get(providerId: string): InferenceProvider &#124; null</code> | 读取 get。 |
-| `infer` | 方法 | <code>infer(providerId: string, request: InferenceRequest): Promise&lt;InferenceResponse&gt;</code> | infer 的公开运行时操作。 |
-| `register` | 方法 | <code>register(provider: InferenceProvider): void</code> | 注册 register。 |
-| `stream` | 方法 | <code>stream(providerId: string, request: InferenceRequest): AsyncIterable&lt;InferenceResponse&gt;</code> | stream 的公开运行时操作。 |
+| `get` | 方法 | <code>get(providerId: string): InferenceProvider &#124; null</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `infer` | 方法 | <code>infer(providerId: string, request: InferenceRequest): Promise&lt;InferenceResponse&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `register` | 方法 | <code>register(provider: InferenceProvider): void</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `stream` | 方法 | <code>stream(providerId: string, request: InferenceRequest): AsyncIterable&lt;InferenceResponse&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `InMemoryKvCacheProvider` 公开成员
+## `InMemoryKvCacheProvider`
+
+In Memory Kv Cache Provider 类，共公开 6 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { InMemoryKvCacheProvider } from '@codesoul-co/hypha-inference';`
+- 源码模块: [`manager`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
+
+### 声明
+
+```text
+export declare class InMemoryKvCacheProvider implements KvCacheProvider {
+    constructor(options?: InMemoryKvCacheProviderOptions);
+    get(ref: KvCacheRef): Promise<unknown | null>;
+    put(ref: KvCacheRef, value: unknown): Promise<void>;
+    invalidate(ref: KvCacheRef): Promise<void>;
+    size(): number;
+    stats(): {
+            entries: number;
+            totalBytes: number;
+        };
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(options?: InMemoryKvCacheProviderOptions): InMemoryKvCacheProvider</code> | 创建该类的实例。 |
-| `get` | 方法 | <code>get(ref: KvCacheRef): Promise&lt;unknown &#124; null&gt;</code> | 读取 get。 |
-| `invalidate` | 方法 | <code>invalidate(ref: KvCacheRef): Promise&lt;void&gt;</code> | invalidate 的公开运行时操作。 |
-| `put` | 方法 | <code>put(ref: KvCacheRef, value: unknown): Promise&lt;void&gt;</code> | put 的公开运行时操作。 |
-| `size` | 方法 | <code>size(): number</code> | size 的公开运行时操作。 |
-| `stats` | 方法 | <code>stats(): { entries: number; totalBytes: number; }</code> | stats 的公开运行时操作。 |
+| `get` | 方法 | <code>get(ref: KvCacheRef): Promise&lt;unknown &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `invalidate` | 方法 | <code>invalidate(ref: KvCacheRef): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `put` | 方法 | <code>put(ref: KvCacheRef, value: unknown): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `size` | 方法 | <code>size(): number</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `stats` | 方法 | <code>stats(): { entries: number; totalBytes: number; }</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `InMemoryPrefixCacheProvider` 公开成员
+## `InMemoryPrefixCacheProvider`
+
+In Memory Prefix Cache Provider 类，共公开 5 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { InMemoryPrefixCacheProvider } from '@codesoul-co/hypha-inference';`
+- 源码模块: [`manager`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
+
+### 声明
+
+```text
+export declare class InMemoryPrefixCacheProvider implements PrefixCacheProvider {
+    constructor(options?: InMemoryPrefixCacheProviderOptions);
+    get(ref: PrefixCacheRef): Promise<string | null>;
+    put(ref: PrefixCacheRef, content: string): Promise<void>;
+    invalidate(ref: PrefixCacheRef): Promise<void>;
+    stats(): {
+            entries: number;
+            totalBytes: number;
+        };
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(options?: InMemoryPrefixCacheProviderOptions): InMemoryPrefixCacheProvider</code> | 创建该类的实例。 |
-| `get` | 方法 | <code>get(ref: PrefixCacheRef): Promise&lt;string &#124; null&gt;</code> | 读取 get。 |
-| `invalidate` | 方法 | <code>invalidate(ref: PrefixCacheRef): Promise&lt;void&gt;</code> | invalidate 的公开运行时操作。 |
-| `put` | 方法 | <code>put(ref: PrefixCacheRef, content: string): Promise&lt;void&gt;</code> | put 的公开运行时操作。 |
-| `stats` | 方法 | <code>stats(): { entries: number; totalBytes: number; }</code> | stats 的公开运行时操作。 |
+| `get` | 方法 | <code>get(ref: PrefixCacheRef): Promise&lt;string &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `invalidate` | 方法 | <code>invalidate(ref: PrefixCacheRef): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `put` | 方法 | <code>put(ref: PrefixCacheRef, content: string): Promise&lt;void&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `stats` | 方法 | <code>stats(): { entries: number; totalBytes: number; }</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `InMemoryKvCacheProviderOptions` 契约字段
+## `InMemoryKvCacheProviderOptions`
+
+In Memory Kv Cache Provider Options 接口，共包含 3 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { InMemoryKvCacheProviderOptions } from '@codesoul-co/hypha-inference';`
+- 源码模块: [`manager`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
+
+### 声明
+
+```text
+export interface InMemoryKvCacheProviderOptions {
+    maxEntries?: number;
+    maxEntryBytes?: number;
+    maxTotalBytes?: number;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `maxEntries` | 属性 | <code>maxEntries: number</code> | max Entries 字段。 |
-| `maxEntryBytes` | 属性 | <code>maxEntryBytes: number</code> | max Entry Bytes 字段。 |
-| `maxTotalBytes` | 属性 | <code>maxTotalBytes: number</code> | max Total Bytes 字段。 |
+| `maxEntries` | 属性 | <code>maxEntries?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxEntryBytes` | 属性 | <code>maxEntryBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxTotalBytes` | 属性 | <code>maxTotalBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `InMemoryPrefixCacheProviderOptions` 契约字段
+## `InMemoryPrefixCacheProviderOptions`
+
+In Memory Prefix Cache Provider Options 接口，共包含 3 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { InMemoryPrefixCacheProviderOptions } from '@codesoul-co/hypha-inference';`
+- 源码模块: [`manager`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/manager.ts)
+
+### 声明
+
+```text
+export interface InMemoryPrefixCacheProviderOptions {
+    maxEntries?: number;
+    maxEntryBytes?: number;
+    maxTotalBytes?: number;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `maxEntries` | 属性 | <code>maxEntries: number</code> | max Entries 字段。 |
-| `maxEntryBytes` | 属性 | <code>maxEntryBytes: number</code> | max Entry Bytes 字段。 |
-| `maxTotalBytes` | 属性 | <code>maxTotalBytes: number</code> | max Total Bytes 字段。 |
+| `maxEntries` | 属性 | <code>maxEntries?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxEntryBytes` | 属性 | <code>maxEntryBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxTotalBytes` | 属性 | <code>maxTotalBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |

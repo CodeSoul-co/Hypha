@@ -531,7 +531,6 @@ NODE_ENV=production npm start
 Hypha v1.0.1 已发布 15 个版本对齐的 npm Library；应用应在整个依赖图中固定相同的精确版本。
 根 Workspace、内置 Server、CLI 及所有标记为 private 的 Package 仍是源码/部署 Surface。参见
 [VitePress Package 文档](https://codesoul-co.github.io/Hypha/zh/packages/)、
-[开发与发布流程](website/zh/guide/development-workflow.md)、
 [Release 与 npm Package](docs/guides/releases.md)及[升级指南](UPGRADING.md)。
 
 | Package                                                                           | 职责                                                                                   |
@@ -551,8 +550,7 @@ Hypha v1.0.1 已发布 15 个版本对齐的 npm Library；应用应在整个依
 ## 文档
 
 - [中英双语 VitePress 文档](https://codesoul-co.github.io/Hypha/zh/)
-- [逐功能地图](https://codesoul-co.github.io/Hypha/zh/guide/capability-map)
-- [逐模块/类/函数完整 API](https://codesoul-co.github.io/Hypha/zh/api/)
+- [按包、模块、类、函数、类型与常量拆分的完整 API 参考](https://codesoul-co.github.io/Hypha/zh/api/)
 - [7 个独立功能示例与完整系统示例](https://codesoul-co.github.io/Hypha/zh/guide/examples)
 - [官方网站](https://hypha.code-soul.com/)
 - [文档索引](docs/README.md)

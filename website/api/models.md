@@ -2,9 +2,10 @@
 
 Model provider registry, routing and deterministic mock providers.
 
-- Package guide: [`@codesoul-co/hypha-models`](/packages/models)
 - Install: `npm install @codesoul-co/hypha-models@1.0.1`
+- Entrypoint import: `import { ... } from '@codesoul-co/hypha-models';`
 - Public exports: **55**
+- Source modules: **3**
 
 ## Export overview
 
@@ -18,19 +19,12 @@ Model provider registry, routing and deterministic mock providers.
 
 ## Source modules
 
-| Module | Exports | Source |
-| --- | ---: | --- |
-| [`index`](/api/models/entrypoint) | 36 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/models/src/index.ts) |
-| [`providers`](/api/models/providers) | 9 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/models/src/providers.ts) |
-| [`router`](/api/models/router) | 10 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/models/src/router.ts) |
+| Module | Use when | Exports | Source |
+| --- | --- | ---: | --- |
+| [`index`](/api/models/entrypoint) | Aggregates the public entrypoint exports for `@codesoul-co/hypha-models`; applications import these symbols from the package entrypoint instead of internal file paths. | 36 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/models/src/index.ts) |
+| [`providers`](/api/models/providers) | Use the Providers module for binding external or local providers to Hypha ports. It exports 3 classes, 3 functions, 3 interfaces. | 9 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/models/src/providers.ts) |
+| [`router`](/api/models/router) | Use the Router module for using the public contracts and operations for this capability boundary. It exports 3 classes, 2 functions, 4 interfaces, 1 type. | 10 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/models/src/router.ts) |
 
-## Reading order
+## Import boundary
 
-Choose a source module above, then inspect its exported symbols, signatures, descriptions and public class/interface members. Every module page links back to the implementation source.
-
-## Usage conventions
-
-- Import from the package entrypoint instead of relying on unexported internal files.
-- Parse configuration, network requests and persisted data with runtime schemas.
-- Classes provide runtime behavior while specs/interfaces define cross-module contracts; do not leak provider SDK types into Core.
-- Use the [runnable examples](/guide/examples) to verify real call order.
+This page documents only the public API exported by the `@codesoul-co/hypha-models` package entrypoint. Implementations under `packages/models/src` that are not exported from that entrypoint are not part of the npm package contract.

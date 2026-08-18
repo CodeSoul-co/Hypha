@@ -1,331 +1,909 @@
 # `@codesoul-co/hypha-core` / `specs`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/specs.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
 - Exports: **28**
+
+## Using this module
+
+Use the Specs module for declaring and runtime-validating contracts. It exports 2 constants, 2 functions, 22 interfaces, 2 types.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  allowAllPolicyEngine,
+  denyExternalEffectsPolicyEngine,
+  assertVersionedSpec,
+  createPolicySpecEngine,
+} from '@codesoul-co/hypha-core';
+
+import type {
+  AuditPolicySpec,
+  ContextSourceSpec,
+  ContextSpec,
+  DeploymentSpec,
+  EvaluationSpec,
+  HarnessedAgentSystemSpec,
+  HumanReviewPolicySpec,
+  JsonSchema,
+} from '@codesoul-co/hypha-core';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 24 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 2 functions as direct operation entrypoints. Every overload, required/optional parameter, and return type is documented below.
+- The 2 constant/enum exports provide stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `allowAllPolicyEngine` | constant | <code>const allowAllPolicyEngine: PolicyEngine</code> | allow All Policy Engine constant exported by the `specs` module. |
-| `denyExternalEffectsPolicyEngine` | constant | <code>const denyExternalEffectsPolicyEngine: PolicyEngine</code> | deny External Effects Policy Engine constant exported by the `specs` module. |
-| `assertVersionedSpec` | function | <code>assertVersionedSpec(spec: VersionedSpec, label?: string): void</code> | Asserts Versioned Spec at this module boundary. |
-| `createPolicySpecEngine` | function | <code>createPolicySpecEngine(policy: PolicySpec): PolicyEngine</code> | Creates Policy Spec Engine at this module boundary. |
-| `AuditPolicySpec` | interface | <code>interface AuditPolicySpec</code> | Field contract for Audit Policy Spec; see all contract members below. |
-| `ContextSourceSpec` | interface | <code>interface ContextSourceSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Context Source Spec; see all contract members below. |
-| `ContextSpec` | interface | <code>interface ContextSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Context Spec; see all contract members below. |
-| `DeploymentSpec` | interface | <code>interface DeploymentSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Deployment Spec; see all contract members below. |
-| `EvaluationSpec` | interface | <code>interface EvaluationSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Evaluation Spec; see all contract members below. |
-| `HarnessedAgentSystemSpec` | interface | <code>interface HarnessedAgentSystemSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Harnessed Agent System Spec; see all contract members below. |
-| `HumanReviewPolicySpec` | interface | <code>interface HumanReviewPolicySpec</code> | Field contract for Human Review Policy Spec; see all contract members below. |
+| `allowAllPolicyEngine` | constant | <code>const allowAllPolicyEngine: PolicyEngine</code> | Allow All Policy Engine constant exported by the `specs` module. |
+| `denyExternalEffectsPolicyEngine` | constant | <code>const denyExternalEffectsPolicyEngine: PolicyEngine</code> | Deny External Effects Policy Engine constant exported by the `specs` module. |
+| `assertVersionedSpec` | function | <code>assertVersionedSpec(spec: VersionedSpec, label?: string): void</code> | Assert Versioned Spec function with 1 public call signature; parameters and return types are listed below. |
+| `createPolicySpecEngine` | function | <code>createPolicySpecEngine(policy: PolicySpec): PolicyEngine</code> | Create Policy Spec Engine function with 1 public call signature; parameters and return types are listed below. |
+| `AuditPolicySpec` | interface | <code>interface AuditPolicySpec</code> | Audit Policy Spec interface with 4 public fields or methods. |
+| `ContextSourceSpec` | interface | <code>interface ContextSourceSpec extends VersionedSpec, SpecMetadata</code> | Context Source Spec interface with 11 public fields or methods. |
+| `ContextSpec` | interface | <code>interface ContextSpec extends VersionedSpec, SpecMetadata</code> | Context Spec interface with 12 public fields or methods. |
+| `DeploymentSpec` | interface | <code>interface DeploymentSpec extends VersionedSpec, SpecMetadata</code> | Deployment Spec interface with 11 public fields or methods. |
+| `EvaluationSpec` | interface | <code>interface EvaluationSpec extends VersionedSpec, SpecMetadata</code> | Evaluation Spec interface with 11 public fields or methods. |
+| `HarnessedAgentSystemSpec` | interface | <code>interface HarnessedAgentSystemSpec extends VersionedSpec, SpecMetadata</code> | Harnessed Agent System Spec interface with 25 public fields or methods. |
+| `HumanReviewPolicySpec` | interface | <code>interface HumanReviewPolicySpec</code> | Human Review Policy Spec interface with 4 public fields or methods. |
 | `JsonSchema` | interface | <code>interface JsonSchema</code> | JSON Schema for . |
-| `OutputContractSpec` | interface | <code>interface OutputContractSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Output Contract Spec; see all contract members below. |
-| `PolicyDecision` | interface | <code>interface PolicyDecision</code> | Field contract for Policy Decision; see all contract members below. |
-| `PolicyEngine` | interface | <code>interface PolicyEngine</code> | Field contract for Policy Engine; see all contract members below. |
-| `PolicyEvaluationContext` | interface | <code>interface PolicyEvaluationContext</code> | Field contract for Policy Evaluation Context; see all contract members below. |
-| `PolicyRuleSpec` | interface | <code>interface PolicyRuleSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Policy Rule Spec; see all contract members below. |
-| `PolicySpec` | interface | <code>interface PolicySpec extends VersionedSpec, SpecMetadata</code> | Field contract for Policy Spec; see all contract members below. |
-| `RegressionSpec` | interface | <code>interface RegressionSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Regression Spec; see all contract members below. |
-| `ReplaySpec` | interface | <code>interface ReplaySpec extends VersionedSpec, SpecMetadata</code> | Field contract for Replay Spec; see all contract members below. |
-| `RetryPolicySpec` | interface | <code>interface RetryPolicySpec</code> | Field contract for Retry Policy Spec; see all contract members below. |
-| `SpecMetadata` | interface | <code>interface SpecMetadata</code> | Field contract for Spec Metadata; see all contract members below. |
-| `SpecRef` | interface | <code>interface SpecRef</code> | Field contract for Spec Ref; see all contract members below. |
-| `TimeoutPolicySpec` | interface | <code>interface TimeoutPolicySpec</code> | Field contract for Timeout Policy Spec; see all contract members below. |
-| `TraceSpec` | interface | <code>interface TraceSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Trace Spec; see all contract members below. |
-| `VersionedSpec` | interface | <code>interface VersionedSpec</code> | Field contract for Versioned Spec; see all contract members below. |
-| `RiskLevel` | type | <code>type RiskLevel = 'low' &#124; 'medium' &#124; 'high' &#124; 'critical'</code> | Public type alias for Risk Level. |
-| `SideEffectLevel` | type | <code>type SideEffectLevel = 'none' &#124; 'read' &#124; 'write' &#124; 'external_effect' &#124; 'irreversible'</code> | Public type alias for Side Effect Level. |
+| `OutputContractSpec` | interface | <code>interface OutputContractSpec extends VersionedSpec, SpecMetadata</code> | Output Contract Spec interface with 9 public fields or methods. |
+| `PolicyDecision` | interface | <code>interface PolicyDecision</code> | Policy Decision interface with 6 public fields or methods. |
+| `PolicyEngine` | interface | <code>interface PolicyEngine</code> | Policy Engine interface with 1 public fields or methods. |
+| `PolicyEvaluationContext` | interface | <code>interface PolicyEvaluationContext</code> | Policy Evaluation Context interface with 7 public fields or methods. |
+| `PolicyRuleSpec` | interface | <code>interface PolicyRuleSpec extends VersionedSpec, SpecMetadata</code> | Policy Rule Spec interface with 12 public fields or methods. |
+| `PolicySpec` | interface | <code>interface PolicySpec extends VersionedSpec, SpecMetadata</code> | Policy Spec interface with 10 public fields or methods. |
+| `RegressionSpec` | interface | <code>interface RegressionSpec extends VersionedSpec, SpecMetadata</code> | Regression Spec interface with 10 public fields or methods. |
+| `ReplaySpec` | interface | <code>interface ReplaySpec extends VersionedSpec, SpecMetadata</code> | Replay Spec interface with 13 public fields or methods. |
+| `RetryPolicySpec` | interface | <code>interface RetryPolicySpec</code> | Retry Policy Spec interface with 6 public fields or methods. |
+| `SpecMetadata` | interface | <code>interface SpecMetadata</code> | Spec Metadata interface with 6 public fields or methods. |
+| `SpecRef` | interface | <code>interface SpecRef</code> | Spec Ref interface with 3 public fields or methods. |
+| `TimeoutPolicySpec` | interface | <code>interface TimeoutPolicySpec</code> | Timeout Policy Spec interface with 2 public fields or methods. |
+| `TraceSpec` | interface | <code>interface TraceSpec extends VersionedSpec, SpecMetadata</code> | Trace Spec interface with 11 public fields or methods. |
+| `VersionedSpec` | interface | <code>interface VersionedSpec</code> | Versioned Spec interface with 2 public fields or methods. |
+| `RiskLevel` | type | <code>type RiskLevel = 'low' &#124; 'medium' &#124; 'high' &#124; 'critical'</code> | Public type alias for Risk Level; the declaration contains its complete type expression. |
+| `SideEffectLevel` | type | <code>type SideEffectLevel = 'none' &#124; 'read' &#124; 'write' &#124; 'external_effect' &#124; 'irreversible'</code> | Public type alias for Side Effect Level; the declaration contains its complete type expression. |
 
-## `AuditPolicySpec` contract members
+## `allowAllPolicyEngine`
+
+Allow All Policy Engine constant exported by the `specs` module.
+
+- Kind: constant
+- Import: `import { allowAllPolicyEngine } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export declare const allowAllPolicyEngine: PolicyEngine;
+```
+
+## `denyExternalEffectsPolicyEngine`
+
+Deny External Effects Policy Engine constant exported by the `specs` module.
+
+- Kind: constant
+- Import: `import { denyExternalEffectsPolicyEngine } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export declare const denyExternalEffectsPolicyEngine: PolicyEngine;
+```
+
+## `assertVersionedSpec`
+
+Assert Versioned Spec function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { assertVersionedSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export declare function assertVersionedSpec(spec: VersionedSpec, label?: string): void;
+```
+
+### Call signature
+
+```text
+assertVersionedSpec(spec: VersionedSpec, label?: string): void
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `spec` | <code>VersionedSpec</code> | Yes | Required parameter; accepted values are defined by the type column. |
+| `label` | <code>string</code> | No | Optional parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `void`
+- Description: Returns no value.
+
+## `createPolicySpecEngine`
+
+Create Policy Spec Engine function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { createPolicySpecEngine } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export declare function createPolicySpecEngine(policy: PolicySpec): PolicyEngine;
+```
+
+### Call signature
+
+```text
+createPolicySpecEngine(policy: PolicySpec): PolicyEngine
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `policy` | <code>PolicySpec</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `PolicyEngine`
+- Description: The return contract is defined by the type shown above.
+
+## `AuditPolicySpec`
+
+Audit Policy Spec interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { AuditPolicySpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface AuditPolicySpec {
+    enabled: boolean;
+    includeInput?: boolean;
+    includeOutput?: boolean;
+    redactPaths?: string[];
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `enabled` | property | <code>enabled: boolean</code> | Public enabled property. |
-| `includeInput` | property | <code>includeInput: boolean</code> | Public include Input property. |
-| `includeOutput` | property | <code>includeOutput: boolean</code> | Public include Output property. |
-| `redactPaths` | property | <code>redactPaths: string[]</code> | Public redact Paths property. |
+| `enabled` | property | <code>enabled: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeInput` | property | <code>includeInput?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeOutput` | property | <code>includeOutput?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `redactPaths` | property | <code>redactPaths?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextSourceSpec` contract members
+## `ContextSourceSpec`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `provenanceRequired` | property | <code>provenanceRequired: boolean</code> | Public provenance Required property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `trustLevel` | property | <code>trustLevel: "trusted" &#124; "reviewed" &#124; "untrusted"</code> | Public trust Level property. |
-| `type` | property | <code>type: "memory" &#124; "artifact" &#124; "skill" &#124; "domain" &#124; "mcp" &#124; "user_input" &#124; "system"</code> | Public type property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+Context Source Spec interface with 11 public fields or methods.
 
-## `ContextSpec` contract members
+- Kind: interface
+- Import: `import type { ContextSourceSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `instructionBoundaryPolicy` | property | <code>instructionBoundaryPolicy: "none" &#124; "strict" &#124; "tagged"</code> | Public instruction Boundary Policy property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `provenancePolicy` | property | <code>provenancePolicy: "none" &#124; "required" &#124; "best_effort"</code> | Public provenance Policy property. |
-| `sources` | property | <code>sources: ContextSourceSpec[]</code> | Public sources property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `tokenBudget` | property | <code>tokenBudget: number</code> | Public token Budget property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+### Declaration
 
-## `DeploymentSpec` contract members
+```text
+export interface ContextSourceSpec extends VersionedSpec, SpecMetadata {
+    type: 'memory' | 'artifact' | 'skill' | 'domain' | 'mcp' | 'user_input' | 'system';
+    provenanceRequired?: boolean;
+    trustLevel?: 'trusted' | 'reviewed' | 'untrusted';
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `configRefs` | property | <code>configRefs: SpecRef[]</code> | Public config Refs property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `mode` | property | <code>mode: "local" &#124; "self_hosted" &#124; "managed"</code> | Public mode property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `runtimeMode` | property | <code>runtimeMode: "single-user" &#124; "multi-user"</code> | Public runtime Mode property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenanceRequired` | property | <code>provenanceRequired?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `trustLevel` | property | <code>trustLevel?: "trusted" &#124; "reviewed" &#124; "untrusted"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: "memory" &#124; "artifact" &#124; "skill" &#124; "domain" &#124; "mcp" &#124; "user_input" &#124; "system"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `EvaluationSpec` contract members
+## `ContextSpec`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `deterministic` | property | <code>deterministic: boolean</code> | Public deterministic property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `rubric` | property | <code>rubric: JsonSchema</code> | Public rubric property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `type` | property | <code>type: "schema" &#124; "output_contract" &#124; "tool_trace" &#124; "policy" &#124; "process" &#124; "cost" &#124; "latency" &#124; "regression" &#124; "human"</code> | Public type property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+Context Spec interface with 12 public fields or methods.
 
-## `HarnessedAgentSystemSpec` contract members
+- Kind: interface
+- Import: `import type { ContextSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agentRef` | property | <code>agentRef: SpecRef</code> | Public agent Ref property. |
-| `businessRuleRefs` | property | <code>businessRuleRefs: SpecRef[]</code> | Public business Rule Refs property. |
-| `contextRefs` | property | <code>contextRefs: SpecRef[]</code> | Public context Refs property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `deploymentRef` | property | <code>deploymentRef: SpecRef</code> | Public deployment Ref property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `evaluationRefs` | property | <code>evaluationRefs: SpecRef[]</code> | Public evaluation Refs property. |
-| `fsmProcessRef` | property | <code>fsmProcessRef: SpecRef</code> | Public fsm Process Ref property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `mcpRefs` | property | <code>mcpRefs: SpecRef[]</code> | Public mcp Refs property. |
-| `memoryRefs` | property | <code>memoryRefs: SpecRef[]</code> | Public memory Refs property. |
-| `modelProfileRef` | property | <code>modelProfileRef: SpecRef</code> | Public model Profile Ref property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `outputContractRefs` | property | <code>outputContractRefs: SpecRef[]</code> | Public output Contract Refs property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `policyRefs` | property | <code>policyRefs: SpecRef[]</code> | Public policy Refs property. |
-| `reasoningRefs` | property | <code>reasoningRefs: SpecRef[]</code> | Public reasoning Refs property. |
-| `regressionRef` | property | <code>regressionRef: SpecRef</code> | Public regression Ref property. |
-| `replayRef` | property | <code>replayRef: SpecRef</code> | Public replay Ref property. |
-| `skillRefs` | property | <code>skillRefs: SpecRef[]</code> | Public skill Refs property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `toolRefs` | property | <code>toolRefs: SpecRef[]</code> | Public tool Refs property. |
-| `traceRef` | property | <code>traceRef: SpecRef</code> | Public trace Ref property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+### Declaration
 
-## `HumanReviewPolicySpec` contract members
+```text
+export interface ContextSpec extends VersionedSpec, SpecMetadata {
+    sources: ContextSourceSpec[];
+    tokenBudget?: number;
+    provenancePolicy?: 'required' | 'best_effort' | 'none';
+    instructionBoundaryPolicy?: 'strict' | 'tagged' | 'none';
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `approverRole` | property | <code>approverRole: string</code> | Public approver Role property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `required` | property | <code>required: boolean</code> | Public required property. |
-| `timeoutPolicy` | property | <code>timeoutPolicy: TimeoutPolicySpec</code> | Public timeout Policy property. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `instructionBoundaryPolicy` | property | <code>instructionBoundaryPolicy?: "none" &#124; "strict" &#124; "tagged"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenancePolicy` | property | <code>provenancePolicy?: "none" &#124; "required" &#124; "best_effort"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sources` | property | <code>sources: ContextSourceSpec[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenBudget` | property | <code>tokenBudget?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `JsonSchema` contract members
+## `DeploymentSpec`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `additionalProperties` | property | <code>additionalProperties: boolean &#124; JsonSchema</code> | Public additional Properties property. |
-| `enum` | property | <code>enum: unknown[]</code> | Public enum property. |
-| `items` | property | <code>items: JsonSchema</code> | Public items property. |
-| `properties` | property | <code>properties: Record&lt;string, JsonSchema&gt;</code> | Public properties property. |
-| `required` | property | <code>required: string[]</code> | Public required property. |
-| `type` | property | <code>type: string</code> | Public type property. |
+Deployment Spec interface with 11 public fields or methods.
 
-## `OutputContractSpec` contract members
+- Kind: interface
+- Import: `import type { DeploymentSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `schema` | property | <code>schema: JsonSchema</code> | Public schema property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+### Declaration
 
-## `PolicyDecision` contract members
+```text
+export interface DeploymentSpec extends VersionedSpec, SpecMetadata {
+    mode: 'local' | 'self_hosted' | 'managed';
+    runtimeMode?: 'single-user' | 'multi-user';
+    configRefs?: SpecRef[];
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `allowed` | property | <code>allowed: boolean</code> | Public allowed property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `policyId` | property | <code>policyId: string</code> | Public policy Id property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `requiresHumanReview` | property | <code>requiresHumanReview: boolean</code> | Public requires Human Review property. |
-| `ruleId` | property | <code>ruleId: string</code> | Public rule Id property. |
-
-## `PolicyEngine` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `evaluate` | method | <code>evaluate(context: PolicyEvaluationContext): Promise&lt;PolicyDecision&gt;</code> | Evaluates evaluate at this module boundary. |
+| `configRefs` | property | <code>configRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: "local" &#124; "self_hosted" &#124; "managed"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runtimeMode` | property | <code>runtimeMode?: "single-user" &#124; "multi-user"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PolicyEvaluationContext` contract members
+## `EvaluationSpec`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `capabilityId` | property | <code>capabilityId: string</code> | Public capability Id property. |
-| `input` | property | <code>input: TInput</code> | Public input property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sideEffectLevel` | property | <code>sideEffectLevel: SideEffectLevel</code> | Public side Effect Level property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `userId` | property | <code>userId: string</code> | Public user Id property. |
+Evaluation Spec interface with 11 public fields or methods.
 
-## `PolicyRuleSpec` contract members
+- Kind: interface
+- Import: `import type { EvaluationSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `effect` | property | <code>effect: "allow" &#124; "deny" &#124; "require_human_review"</code> | Public effect property. |
-| `expression` | property | <code>expression: string</code> | Public expression property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `scopes` | property | <code>scopes: string[]</code> | Public scopes property. |
-| `sideEffectLevels` | property | <code>sideEffectLevels: SideEffectLevel[]</code> | Public side Effect Levels property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+### Declaration
 
-## `PolicySpec` contract members
+```text
+export interface EvaluationSpec extends VersionedSpec, SpecMetadata {
+    type: 'schema' | 'output_contract' | 'tool_trace' | 'policy' | 'process' | 'cost' | 'latency' | 'regression' | 'human';
+    rubric?: JsonSchema;
+    deterministic?: boolean;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `defaultEffect` | property | <code>defaultEffect: "allow" &#124; "deny"</code> | Public default Effect property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `rules` | property | <code>rules: PolicyRuleSpec[]</code> | Public rules property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
-
-## `RegressionSpec` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `fixtureRefs` | property | <code>fixtureRefs: SpecRef[]</code> | Public fixture Refs property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `requiredChecks` | property | <code>requiredChecks: ("output_contract" &#124; "state_path" &#124; "event_types" &#124; "tool_calls" &#124; "policy_decisions")[]</code> | Public required Checks property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deterministic` | property | <code>deterministic?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rubric` | property | <code>rubric?: JsonSchema</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: "schema" &#124; "output_contract" &#124; "tool_trace" &#124; "policy" &#124; "process" &#124; "cost" &#124; "latency" &#124; "regression" &#124; "human"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReplaySpec` contract members
+## `HarnessedAgentSystemSpec`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `captureMemoryReadSet` | property | <code>captureMemoryReadSet: boolean</code> | Public capture Memory Read Set property. |
-| `captureModelIO` | property | <code>captureModelIO: boolean</code> | Public capture Model IO property. |
-| `capturePolicyDecisions` | property | <code>capturePolicyDecisions: boolean</code> | Public capture Policy Decisions property. |
-| `captureToolIO` | property | <code>captureToolIO: boolean</code> | Public capture Tool IO property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `snapshotPolicy` | property | <code>snapshotPolicy: "none" &#124; "state_path" &#124; "full"</code> | Public snapshot Policy property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+Harnessed Agent System Spec interface with 25 public fields or methods.
 
-## `RetryPolicySpec` contract members
+- Kind: interface
+- Import: `import type { HarnessedAgentSystemSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `backoffMs` | property | <code>backoffMs: number</code> | Public backoff Ms property. |
-| `jitterRatio` | property | <code>jitterRatio: number</code> | Public jitter Ratio property. |
-| `maxAttempts` | property | <code>maxAttempts: number</code> | Public max Attempts property. |
-| `maxBackoffMs` | property | <code>maxBackoffMs: number</code> | Public max Backoff Ms property. |
-| `maxElapsedMs` | property | <code>maxElapsedMs: number</code> | Public max Elapsed Ms property. |
-| `retryableCodes` | property | <code>retryableCodes: string[]</code> | Public retryable Codes property. |
+### Declaration
 
-## `SpecMetadata` contract members
+```text
+export interface HarnessedAgentSystemSpec extends VersionedSpec, SpecMetadata {
+    agentRef: SpecRef;
+    fsmProcessRef: SpecRef;
+    traceRef: SpecRef;
+    policyRefs?: SpecRef[];
+    memoryRefs?: SpecRef[];
+    toolRefs?: SpecRef[];
+    skillRefs?: SpecRef[];
+    mcpRefs?: SpecRef[];
+    contextRefs?: SpecRef[];
+    reasoningRefs?: SpecRef[];
+    outputContractRefs?: SpecRef[];
+    businessRuleRefs?: SpecRef[];
+    modelProfileRef?: SpecRef;
+    evaluationRefs?: SpecRef[];
+    replayRef?: SpecRef;
+    regressionRef?: SpecRef;
+    deploymentRef?: SpecRef;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-
-## `SpecRef` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `revision` | property | <code>revision: string</code> | Public revision property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+| `agentRef` | property | <code>agentRef: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `businessRuleRefs` | property | <code>businessRuleRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextRefs` | property | <code>contextRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deploymentRef` | property | <code>deploymentRef?: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `evaluationRefs` | property | <code>evaluationRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `fsmProcessRef` | property | <code>fsmProcessRef: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mcpRefs` | property | <code>mcpRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryRefs` | property | <code>memoryRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelProfileRef` | property | <code>modelProfileRef?: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `outputContractRefs` | property | <code>outputContractRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `policyRefs` | property | <code>policyRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoningRefs` | property | <code>reasoningRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `regressionRef` | property | <code>regressionRef?: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `replayRef` | property | <code>replayRef?: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `skillRefs` | property | <code>skillRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolRefs` | property | <code>toolRefs?: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `traceRef` | property | <code>traceRef: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `TimeoutPolicySpec` contract members
+## `HumanReviewPolicySpec`
+
+Human Review Policy Spec interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { HumanReviewPolicySpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface HumanReviewPolicySpec {
+    required: boolean;
+    reason?: string;
+    approverRole?: string;
+    timeoutPolicy?: TimeoutPolicySpec;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `onTimeout` | property | <code>onTimeout: "fail" &#124; "retry" &#124; "human_review"</code> | Public on Timeout property. |
-| `timeoutMs` | property | <code>timeoutMs: number</code> | Public timeout Ms property. |
+| `approverRole` | property | <code>approverRole?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `required` | property | <code>required: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `timeoutPolicy` | property | <code>timeoutPolicy?: TimeoutPolicySpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `TraceSpec` contract members
+## `JsonSchema`
+
+JSON Schema for .
+
+- Kind: interface
+- Import: `import type { JsonSchema } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface JsonSchema {
+    type?: string;
+    properties?: Record<string, JsonSchema>;
+    required?: string[];
+    items?: JsonSchema;
+    enum?: unknown[];
+    additionalProperties?: boolean | JsonSchema;
+    [key: string]: unknown;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `eventTypes` | property | <code>eventTypes: string[]</code> | Public event Types property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `redactionPolicy` | property | <code>redactionPolicy: string</code> | Public redaction Policy property. |
-| `retentionPolicy` | property | <code>retentionPolicy: string</code> | Public retention Policy property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+| `additionalProperties` | property | <code>additionalProperties?: boolean &#124; JsonSchema</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `enum` | property | <code>enum?: unknown[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `items` | property | <code>items?: JsonSchema</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `properties` | property | <code>properties?: Record&lt;string, JsonSchema&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `required` | property | <code>required?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `VersionedSpec` contract members
+## `OutputContractSpec`
+
+Output Contract Spec interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { OutputContractSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface OutputContractSpec extends VersionedSpec, SpecMetadata {
+    schema: JsonSchema;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `schema` | property | <code>schema: JsonSchema</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PolicyDecision`
+
+Policy Decision interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PolicyDecision } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface PolicyDecision {
+    allowed: boolean;
+    requiresHumanReview?: boolean;
+    policyId?: string;
+    ruleId?: string;
+    reason?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowed` | property | <code>allowed: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `policyId` | property | <code>policyId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requiresHumanReview` | property | <code>requiresHumanReview?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ruleId` | property | <code>ruleId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PolicyEngine`
+
+Policy Engine interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PolicyEngine } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface PolicyEngine {
+    evaluate(context: PolicyEvaluationContext): Promise<PolicyDecision>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `evaluate` | method | <code>evaluate(context: PolicyEvaluationContext): Promise&lt;PolicyDecision&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `PolicyEvaluationContext`
+
+Policy Evaluation Context interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PolicyEvaluationContext } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface PolicyEvaluationContext<TInput = unknown> {
+    runId: string;
+    stepId?: string;
+    userId?: string;
+    capabilityId?: string;
+    sideEffectLevel?: SideEffectLevel;
+    input?: TInput;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `capabilityId` | property | <code>capabilityId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input?: TInput</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sideEffectLevel` | property | <code>sideEffectLevel?: SideEffectLevel</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `userId` | property | <code>userId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PolicyRuleSpec`
+
+Policy Rule Spec interface with 12 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PolicyRuleSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface PolicyRuleSpec extends VersionedSpec, SpecMetadata {
+    effect: 'allow' | 'deny' | 'require_human_review';
+    expression?: string;
+    sideEffectLevels?: SideEffectLevel[];
+    scopes?: string[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `effect` | property | <code>effect: "allow" &#124; "deny" &#124; "require_human_review"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expression` | property | <code>expression?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scopes` | property | <code>scopes?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sideEffectLevels` | property | <code>sideEffectLevels?: SideEffectLevel[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PolicySpec`
+
+Policy Spec interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PolicySpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface PolicySpec extends VersionedSpec, SpecMetadata {
+    rules: PolicyRuleSpec[];
+    defaultEffect?: 'allow' | 'deny';
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `defaultEffect` | property | <code>defaultEffect?: "allow" &#124; "deny"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rules` | property | <code>rules: PolicyRuleSpec[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RegressionSpec`
+
+Regression Spec interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RegressionSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface RegressionSpec extends VersionedSpec, SpecMetadata {
+    fixtureRefs: SpecRef[];
+    requiredChecks: Array<'event_types' | 'state_path' | 'tool_calls' | 'policy_decisions' | 'output_contract'>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `fixtureRefs` | property | <code>fixtureRefs: SpecRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requiredChecks` | property | <code>requiredChecks: ("output_contract" &#124; "state_path" &#124; "event_types" &#124; "tool_calls" &#124; "policy_decisions")[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReplaySpec`
+
+Replay Spec interface with 13 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReplaySpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface ReplaySpec extends VersionedSpec, SpecMetadata {
+    captureModelIO?: boolean;
+    captureToolIO?: boolean;
+    captureMemoryReadSet?: boolean;
+    capturePolicyDecisions?: boolean;
+    snapshotPolicy?: 'none' | 'state_path' | 'full';
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `captureMemoryReadSet` | property | <code>captureMemoryReadSet?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `captureModelIO` | property | <code>captureModelIO?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `capturePolicyDecisions` | property | <code>capturePolicyDecisions?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `captureToolIO` | property | <code>captureToolIO?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `snapshotPolicy` | property | <code>snapshotPolicy?: "none" &#124; "state_path" &#124; "full"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RetryPolicySpec`
+
+Retry Policy Spec interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RetryPolicySpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface RetryPolicySpec {
+    maxAttempts: number;
+    backoffMs?: number;
+    maxBackoffMs?: number;
+    jitterRatio?: number;
+    maxElapsedMs?: number;
+    retryableCodes?: string[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `backoffMs` | property | <code>backoffMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `jitterRatio` | property | <code>jitterRatio?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxAttempts` | property | <code>maxAttempts: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxBackoffMs` | property | <code>maxBackoffMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxElapsedMs` | property | <code>maxElapsedMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retryableCodes` | property | <code>retryableCodes?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `SpecMetadata`
+
+Spec Metadata interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { SpecMetadata } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface SpecMetadata {
+    name?: string;
+    description?: string;
+    owner?: string;
+    tags?: string[];
+    createdAt?: string;
+    updatedAt?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `SpecRef`
+
+Spec Ref interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { SpecRef } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface SpecRef {
+    id: string;
+    version?: string;
+    revision?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `revision` | property | <code>revision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `TimeoutPolicySpec`
+
+Timeout Policy Spec interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { TimeoutPolicySpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface TimeoutPolicySpec {
+    timeoutMs: number;
+    onTimeout?: 'fail' | 'retry' | 'human_review';
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `onTimeout` | property | <code>onTimeout?: "fail" &#124; "retry" &#124; "human_review"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `timeoutMs` | property | <code>timeoutMs: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `TraceSpec`
+
+Trace Spec interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { TraceSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface TraceSpec extends VersionedSpec, SpecMetadata {
+    eventTypes: string[];
+    retentionPolicy?: string;
+    redactionPolicy?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `eventTypes` | property | <code>eventTypes: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `redactionPolicy` | property | <code>redactionPolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retentionPolicy` | property | <code>retentionPolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `VersionedSpec`
+
+Versioned Spec interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { VersionedSpec } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export interface VersionedSpec {
+    id: string;
+    version: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RiskLevel`
+
+Public type alias for Risk Level; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { RiskLevel } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+```
+
+## `SideEffectLevel`
+
+Public type alias for Side Effect Level; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { SideEffectLevel } from '@codesoul-co/hypha-core';`
+- Source module: [`specs`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/specs.ts)
+
+### Declaration
+
+```text
+export type SideEffectLevel = 'none' | 'read' | 'write' | 'external_effect' | 'irreversible';
+```

@@ -2,9 +2,10 @@
 
 Provider-neutral 存储拓扑契约与 Profile Builder。
 
-- 模块指南: [`@codesoul-co/hypha-storage`](/zh/packages/storage)
 - 安装: `npm install @codesoul-co/hypha-storage@1.0.1`
+- 入口导入: `import { ... } from '@codesoul-co/hypha-storage';`
 - 公共导出: **51**
+- 源码模块: **2**
 
 ## 导出概览
 
@@ -17,18 +18,11 @@ Provider-neutral 存储拓扑契约与 Profile Builder。
 
 ## 源码模块
 
-| 模块 | 导出数 | 源码 |
-| --- | ---: | --- |
-| [`index`](/zh/api/storage/entrypoint) | 46 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/storage/src/index.ts) |
-| [`recovery`](/zh/api/storage/recovery) | 5 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/storage/src/recovery.ts) |
+| 模块 | 用途 | 导出数 | 源码 |
+| --- | --- | ---: | --- |
+| [`index`](/zh/api/storage/entrypoint) | 聚合 `@codesoul-co/hypha-storage` 的公共入口导出；应用应从包入口导入这些 Symbol，不应依赖内部文件路径。 | 46 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/storage/src/index.ts) |
+| [`recovery`](/zh/api/storage/recovery) | 用于处理有界恢复、重试或降级。Recovery 模块公开 2 函数、2 接口、1 类型。 | 5 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/storage/src/recovery.ts) |
 
-## 阅读顺序
+## 导入边界
 
-先在上表选择源码模块，再查看该模块导出的 Symbol、签名、说明以及类/接口的公开成员。每个模块页都链接回实际源码。
-
-## 使用约定
-
-- 从包入口导入，不依赖未导出的内部文件。
-- 对配置、网络请求和持久化数据使用 Runtime Schema 解析。
-- 类实例负责运行时行为；Spec/Interface 负责跨模块契约；不要把 Provider SDK 类型泄漏到 Core。
-- 结合[可运行示例](/zh/guide/examples)验证实际调用顺序。
+本页只记录 `@codesoul-co/hypha-storage` 包入口导出的公共 API。`packages/storage/src` 中未由入口导出的实现不属于该 npm 包的公共契约。

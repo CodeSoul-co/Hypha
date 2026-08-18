@@ -1,135 +1,379 @@
 # `@codesoul-co/hypha-core` / `contracts/execution-human-task`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/contracts/execution-human-task.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
 - Exports: **10**
+
+## Using this module
+
+Use the Execution human task module for declaring and runtime-validating contracts. It exports 1 constant, 9 interfaces.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  EXECUTION_HUMAN_TASK_SUBJECT_VERSION,
+} from '@codesoul-co/hypha-core';
+
+import type {
+  ExecutionHumanTaskActivityIdentity,
+  ExecutionHumanTaskCommandSnapshot,
+  ExecutionHumanTaskEnvironmentSnapshot,
+  ExecutionHumanTaskExpectedEffects,
+  ExecutionHumanTaskNetworkSnapshot,
+  ExecutionHumanTaskRiskSnapshot,
+  ExecutionHumanTaskSubject,
+  ExecutionHumanTaskSubjectEnvelope,
+} from '@codesoul-co/hypha-core';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 9 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The 1 constant/enum export provides stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `EXECUTION_HUMAN_TASK_SUBJECT_VERSION` | constant | <code>const EXECUTION_HUMAN_TASK_SUBJECT_VERSION: "1.0.0"</code> | EXECUTION HUMAN TASK SUBJECT VERSION constant exported by the `contracts/execution-human-task` module. |
-| `ExecutionHumanTaskActivityIdentity` | interface | <code>interface ExecutionHumanTaskActivityIdentity</code> | Field contract for Execution Human Task Activity Identity; see all contract members below. |
-| `ExecutionHumanTaskCommandSnapshot` | interface | <code>interface ExecutionHumanTaskCommandSnapshot</code> | Field contract for Execution Human Task Command Snapshot; see all contract members below. |
-| `ExecutionHumanTaskEnvironmentSnapshot` | interface | <code>interface ExecutionHumanTaskEnvironmentSnapshot</code> | Field contract for Execution Human Task Environment Snapshot; see all contract members below. |
-| `ExecutionHumanTaskExpectedEffects` | interface | <code>interface ExecutionHumanTaskExpectedEffects</code> | Field contract for Execution Human Task Expected Effects; see all contract members below. |
-| `ExecutionHumanTaskNetworkSnapshot` | interface | <code>interface ExecutionHumanTaskNetworkSnapshot</code> | Field contract for Execution Human Task Network Snapshot; see all contract members below. |
-| `ExecutionHumanTaskRiskSnapshot` | interface | <code>interface ExecutionHumanTaskRiskSnapshot</code> | Field contract for Execution Human Task Risk Snapshot; see all contract members below. |
+| `ExecutionHumanTaskActivityIdentity` | interface | <code>interface ExecutionHumanTaskActivityIdentity</code> | Execution Human Task Activity Identity interface with 7 public fields or methods. |
+| `ExecutionHumanTaskCommandSnapshot` | interface | <code>interface ExecutionHumanTaskCommandSnapshot</code> | Execution Human Task Command Snapshot interface with 12 public fields or methods. |
+| `ExecutionHumanTaskEnvironmentSnapshot` | interface | <code>interface ExecutionHumanTaskEnvironmentSnapshot</code> | Execution Human Task Environment Snapshot interface with 11 public fields or methods. |
+| `ExecutionHumanTaskExpectedEffects` | interface | <code>interface ExecutionHumanTaskExpectedEffects</code> | Execution Human Task Expected Effects interface with 4 public fields or methods. |
+| `ExecutionHumanTaskNetworkSnapshot` | interface | <code>interface ExecutionHumanTaskNetworkSnapshot</code> | Execution Human Task Network Snapshot interface with 7 public fields or methods. |
+| `ExecutionHumanTaskRiskSnapshot` | interface | <code>interface ExecutionHumanTaskRiskSnapshot</code> | Execution Human Task Risk Snapshot interface with 5 public fields or methods. |
 | `ExecutionHumanTaskSubject` | interface | <code>interface ExecutionHumanTaskSubject</code> | Versioned, redacted subject approved by a Runtime HumanTask before command dispatch. Environment values, stdin, Secret values, and arbitrary request metadata are intentionally absent. |
-| `ExecutionHumanTaskSubjectEnvelope` | interface | <code>interface ExecutionHumanTaskSubjectEnvelope</code> | Field contract for Execution Human Task Subject Envelope; see all contract members below. |
-| `ExecutionHumanTaskToolIdentity` | interface | <code>interface ExecutionHumanTaskToolIdentity</code> | Field contract for Execution Human Task Tool Identity; see all contract members below. |
+| `ExecutionHumanTaskSubjectEnvelope` | interface | <code>interface ExecutionHumanTaskSubjectEnvelope</code> | Execution Human Task Subject Envelope interface with 3 public fields or methods. |
+| `ExecutionHumanTaskToolIdentity` | interface | <code>interface ExecutionHumanTaskToolIdentity</code> | Execution Human Task Tool Identity interface with 6 public fields or methods. |
 
-## `ExecutionHumanTaskActivityIdentity` contract members
+## `EXECUTION_HUMAN_TASK_SUBJECT_VERSION`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `activityId` | property | <code>activityId: string</code> | Public activity Id property. |
-| `deadlineAt` | property | <code>deadlineAt: string</code> | Public deadline At property. |
-| `fencingToken` | property | <code>fencingToken: number</code> | Public fencing Token property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `stateAttemptId` | property | <code>stateAttemptId: string</code> | Public state Attempt Id property. |
-| `workspaceId` | property | <code>workspaceId: string</code> | Public workspace Id property. |
+EXECUTION HUMAN TASK SUBJECT VERSION constant exported by the `contracts/execution-human-task` module.
 
-## `ExecutionHumanTaskCommandSnapshot` contract members
+- Kind: constant
+- Import: `import { EXECUTION_HUMAN_TASK_SUBJECT_VERSION } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `args` | property | <code>args: string[]</code> | Public args property. |
-| `cwd` | property | <code>cwd: string</code> | Public cwd property. |
-| `environmentVariableNames` | property | <code>environmentVariableNames: string[]</code> | Public environment Variable Names property. |
-| `executable` | property | <code>executable: string</code> | Public executable property. |
-| `expectedWorkspaceSnapshotHash` | property | <code>expectedWorkspaceSnapshotHash: string</code> | Public expected Workspace Snapshot Hash property. |
-| `idleTimeoutMs` | property | <code>idleTimeoutMs: number</code> | Public idle Timeout Ms property. |
-| `maxStderrBytes` | property | <code>maxStderrBytes: number</code> | Public max Stderr Bytes property. |
-| `maxStdoutBytes` | property | <code>maxStdoutBytes: number</code> | Public max Stdout Bytes property. |
-| `networkAuthorizationRef` | property | <code>networkAuthorizationRef: string</code> | Public network Authorization Ref property. |
-| `secretRefs` | property | <code>secretRefs: string[]</code> | Public secret Refs property. |
-| `shell` | property | <code>shell: boolean</code> | Public shell property. |
-| `timeoutMs` | property | <code>timeoutMs: number</code> | Public timeout Ms property. |
+### Declaration
 
-## `ExecutionHumanTaskEnvironmentSnapshot` contract members
+```text
+export declare const EXECUTION_HUMAN_TASK_SUBJECT_VERSION: "1.0.0";
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `imageDigest` | property | <code>imageDigest: string</code> | Public image Digest property. |
-| `mounts` | property | <code>mounts: SandboxMountSpec[]</code> | Public mounts property. |
-| `network` | property | <code>network: ExecutionHumanTaskNetworkSnapshot</code> | Public network property. |
-| `provider` | property | <code>provider: "mock" &#124; "local_process" &#124; "docker" &#124; "remote_sandbox" &#124; "custom"</code> | Public provider property. |
-| `providerId` | property | <code>providerId: string</code> | Public provider Id property. |
-| `providerRef` | property | <code>providerRef: string</code> | Public provider Ref property. |
-| `providerRevision` | property | <code>providerRevision: string</code> | Public provider Revision property. |
-| `resources` | property | <code>resources: ResourceLimitSpec</code> | Public resources property. |
-| `revision` | property | <code>revision: string</code> | Public revision property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+## `ExecutionHumanTaskActivityIdentity`
 
-## `ExecutionHumanTaskExpectedEffects` contract members
+Execution Human Task Activity Identity interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskActivityIdentity } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskActivityIdentity {
+    activityId: string;
+    operationId: string;
+    runId: string;
+    stateAttemptId: string;
+    workspaceId: string;
+    fencingToken: number;
+    deadlineAt?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `artifactCapture` | property | <code>artifactCapture: boolean</code> | Public artifact Capture property. |
-| `networkAccess` | property | <code>networkAccess: boolean</code> | Public network Access property. |
-| `secretAccess` | property | <code>secretAccess: boolean</code> | Public secret Access property. |
-| `workspaceWrite` | property | <code>workspaceWrite: boolean</code> | Public workspace Write property. |
+| `activityId` | property | <code>activityId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deadlineAt` | property | <code>deadlineAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `fencingToken` | property | <code>fencingToken: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stateAttemptId` | property | <code>stateAttemptId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `workspaceId` | property | <code>workspaceId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionHumanTaskNetworkSnapshot` contract members
+## `ExecutionHumanTaskCommandSnapshot`
+
+Execution Human Task Command Snapshot interface with 12 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskCommandSnapshot } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskCommandSnapshot {
+    executable: string;
+    args: string[];
+    cwd?: string;
+    shell: boolean;
+    environmentVariableNames: string[];
+    secretRefs: string[];
+    networkAuthorizationRef?: string;
+    expectedWorkspaceSnapshotHash?: string;
+    timeoutMs?: number;
+    idleTimeoutMs?: number;
+    maxStdoutBytes?: number;
+    maxStderrBytes?: number;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `allowedCidrs` | property | <code>allowedCidrs: string[]</code> | Public allowed Cidrs property. |
-| `allowedDomains` | property | <code>allowedDomains: string[]</code> | Public allowed Domains property. |
-| `allowedPorts` | property | <code>allowedPorts: number[]</code> | Public allowed Ports property. |
-| `allowedProtocols` | property | <code>allowedProtocols: ("tcp" &#124; "udp" &#124; "http" &#124; "https" &#124; "dns")[]</code> | Public allowed Protocols property. |
-| `authorizationRef` | property | <code>authorizationRef: string</code> | Public authorization Ref property. |
-| `mode` | property | <code>mode: "disabled" &#124; "restricted" &#124; "enabled" &#124; "task_authorized"</code> | Public mode property. |
-| `proxyRef` | property | <code>proxyRef: string</code> | Public proxy Ref property. |
+| `args` | property | <code>args: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cwd` | property | <code>cwd?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `environmentVariableNames` | property | <code>environmentVariableNames: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `executable` | property | <code>executable: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expectedWorkspaceSnapshotHash` | property | <code>expectedWorkspaceSnapshotHash?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idleTimeoutMs` | property | <code>idleTimeoutMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxStderrBytes` | property | <code>maxStderrBytes?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxStdoutBytes` | property | <code>maxStdoutBytes?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `networkAuthorizationRef` | property | <code>networkAuthorizationRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `secretRefs` | property | <code>secretRefs: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `shell` | property | <code>shell: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `timeoutMs` | property | <code>timeoutMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionHumanTaskRiskSnapshot` contract members
+## `ExecutionHumanTaskEnvironmentSnapshot`
+
+Execution Human Task Environment Snapshot interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskEnvironmentSnapshot } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskEnvironmentSnapshot {
+    id: string;
+    version: string;
+    revision: string;
+    provider: 'mock' | 'local_process' | 'docker' | 'remote_sandbox' | 'custom';
+    providerRef?: string;
+    providerId: string;
+    providerRevision: string;
+    imageDigest?: string;
+    mounts: SandboxMountSpec[];
+    network: ExecutionHumanTaskNetworkSnapshot;
+    resources: ResourceLimitSpec;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `assessmentId` | property | <code>assessmentId: string</code> | Public assessment Id property. |
-| `level` | property | <code>level: RiskLevel</code> | Public level property. |
-| `matchedRules` | property | <code>matchedRules: string[]</code> | Public matched Rules property. |
-| `policyDecisionRef` | property | <code>policyDecisionRef: string</code> | Public policy Decision Ref property. |
-| `reasons` | property | <code>reasons: string[]</code> | Public reasons property. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `imageDigest` | property | <code>imageDigest?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mounts` | property | <code>mounts: SandboxMountSpec[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `network` | property | <code>network: ExecutionHumanTaskNetworkSnapshot</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provider` | property | <code>provider: "mock" &#124; "local_process" &#124; "docker" &#124; "remote_sandbox" &#124; "custom"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerId` | property | <code>providerId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerRef` | property | <code>providerRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerRevision` | property | <code>providerRevision: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resources` | property | <code>resources: ResourceLimitSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `revision` | property | <code>revision: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionHumanTaskSubject` contract members
+## `ExecutionHumanTaskExpectedEffects`
+
+Execution Human Task Expected Effects interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskExpectedEffects } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskExpectedEffects {
+    workspaceWrite: boolean;
+    networkAccess: boolean;
+    secretAccess: boolean;
+    artifactCapture: boolean;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `artifactCapture` | property | <code>artifactCapture: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `networkAccess` | property | <code>networkAccess: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `secretAccess` | property | <code>secretAccess: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `workspaceWrite` | property | <code>workspaceWrite: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ExecutionHumanTaskNetworkSnapshot`
+
+Execution Human Task Network Snapshot interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskNetworkSnapshot } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskNetworkSnapshot {
+    mode: 'disabled' | 'restricted' | 'enabled' | 'task_authorized';
+    allowedDomains: string[];
+    allowedCidrs: string[];
+    allowedPorts: number[];
+    allowedProtocols: Array<'tcp' | 'udp' | 'http' | 'https' | 'dns'>;
+    proxyRef?: string;
+    authorizationRef?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowedCidrs` | property | <code>allowedCidrs: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `allowedDomains` | property | <code>allowedDomains: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `allowedPorts` | property | <code>allowedPorts: number[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `allowedProtocols` | property | <code>allowedProtocols: ("tcp" &#124; "udp" &#124; "http" &#124; "https" &#124; "dns")[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `authorizationRef` | property | <code>authorizationRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: "disabled" &#124; "restricted" &#124; "enabled" &#124; "task_authorized"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `proxyRef` | property | <code>proxyRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ExecutionHumanTaskRiskSnapshot`
+
+Execution Human Task Risk Snapshot interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskRiskSnapshot } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskRiskSnapshot {
+    assessmentId: string;
+    level: RiskLevel;
+    reasons: string[];
+    matchedRules: string[];
+    policyDecisionRef: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `assessmentId` | property | <code>assessmentId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `level` | property | <code>level: RiskLevel</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `matchedRules` | property | <code>matchedRules: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `policyDecisionRef` | property | <code>policyDecisionRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasons` | property | <code>reasons: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ExecutionHumanTaskSubject`
 
 Versioned, redacted subject approved by a Runtime HumanTask before command dispatch. Environment values, stdin, Secret values, and arbitrary request metadata are intentionally absent.
 
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskSubject } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskSubject {
+    id: string;
+    version: typeof EXECUTION_HUMAN_TASK_SUBJECT_VERSION;
+    kind: 'execution';
+    capturedAt: string;
+    principalId: string;
+    inputHash: string;
+    activity: ExecutionHumanTaskActivityIdentity;
+    tool: ExecutionHumanTaskToolIdentity;
+    command: ExecutionHumanTaskCommandSnapshot;
+    environment: ExecutionHumanTaskEnvironmentSnapshot;
+    risk: ExecutionHumanTaskRiskSnapshot;
+    expectedEffects: ExecutionHumanTaskExpectedEffects;
+}
+```
+
+### Contract members
+
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `activity` | property | <code>activity: ExecutionHumanTaskActivityIdentity</code> | Public activity property. |
-| `capturedAt` | property | <code>capturedAt: string</code> | Public captured At property. |
-| `command` | property | <code>command: ExecutionHumanTaskCommandSnapshot</code> | Public command property. |
-| `environment` | property | <code>environment: ExecutionHumanTaskEnvironmentSnapshot</code> | Public environment property. |
-| `expectedEffects` | property | <code>expectedEffects: ExecutionHumanTaskExpectedEffects</code> | Public expected Effects property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `inputHash` | property | <code>inputHash: string</code> | Public input Hash property. |
-| `kind` | property | <code>kind: "execution"</code> | Public kind property. |
-| `principalId` | property | <code>principalId: string</code> | Public principal Id property. |
-| `risk` | property | <code>risk: ExecutionHumanTaskRiskSnapshot</code> | Public risk property. |
-| `tool` | property | <code>tool: ExecutionHumanTaskToolIdentity</code> | Public tool property. |
-| `version` | property | <code>version: "1.0.0"</code> | Public version property. |
+| `activity` | property | <code>activity: ExecutionHumanTaskActivityIdentity</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `capturedAt` | property | <code>capturedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `command` | property | <code>command: ExecutionHumanTaskCommandSnapshot</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `environment` | property | <code>environment: ExecutionHumanTaskEnvironmentSnapshot</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expectedEffects` | property | <code>expectedEffects: ExecutionHumanTaskExpectedEffects</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `inputHash` | property | <code>inputHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>kind: "execution"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principalId` | property | <code>principalId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `risk` | property | <code>risk: ExecutionHumanTaskRiskSnapshot</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tool` | property | <code>tool: ExecutionHumanTaskToolIdentity</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: "1.0.0"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionHumanTaskSubjectEnvelope` contract members
+## `ExecutionHumanTaskSubjectEnvelope`
+
+Execution Human Task Subject Envelope interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskSubjectEnvelope } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskSubjectEnvelope {
+    subjectRef: string;
+    subjectHash: string;
+    subject: ExecutionHumanTaskSubject;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `subject` | property | <code>subject: ExecutionHumanTaskSubject</code> | Public subject property. |
-| `subjectHash` | property | <code>subjectHash: string</code> | Public subject Hash property. |
-| `subjectRef` | property | <code>subjectRef: string</code> | Public subject Ref property. |
+| `subject` | property | <code>subject: ExecutionHumanTaskSubject</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `subjectHash` | property | <code>subjectHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `subjectRef` | property | <code>subjectRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionHumanTaskToolIdentity` contract members
+## `ExecutionHumanTaskToolIdentity`
+
+Execution Human Task Tool Identity interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionHumanTaskToolIdentity } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-human-task`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-human-task.ts)
+
+### Declaration
+
+```text
+export interface ExecutionHumanTaskToolIdentity {
+    toolId: string;
+    toolRevision?: string;
+    operation: ExecutionToolOperation;
+    executionProfileRef: string;
+    sideEffectLevel: ExecutionToolSideEffectLevel;
+    humanReviewPolicyRef: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `executionProfileRef` | property | <code>executionProfileRef: string</code> | Public execution Profile Ref property. |
-| `humanReviewPolicyRef` | property | <code>humanReviewPolicyRef: string</code> | Public human Review Policy Ref property. |
-| `operation` | property | <code>operation: "artifact" &#124; "command" &#124; "file_read" &#124; "file_write" &#124; "sandbox"</code> | Public operation property. |
-| `sideEffectLevel` | property | <code>sideEffectLevel: ExecutionToolSideEffectLevel</code> | Public side Effect Level property. |
-| `toolId` | property | <code>toolId: string</code> | Public tool Id property. |
-| `toolRevision` | property | <code>toolRevision: string</code> | Public tool Revision property. |
+| `executionProfileRef` | property | <code>executionProfileRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `humanReviewPolicyRef` | property | <code>humanReviewPolicyRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operation` | property | <code>operation: "artifact" &#124; "command" &#124; "file_read" &#124; "file_write" &#124; "sandbox"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sideEffectLevel` | property | <code>sideEffectLevel: ExecutionToolSideEffectLevel</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolId` | property | <code>toolId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolRevision` | property | <code>toolRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |

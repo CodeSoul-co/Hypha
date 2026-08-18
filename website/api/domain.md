@@ -2,9 +2,10 @@
 
 Domain Pack validation and compilation into runtime-owned contracts.
 
-- Package guide: [`@codesoul-co/hypha-domain`](/packages/domain)
 - Install: `npm install @codesoul-co/hypha-domain@1.0.1`
+- Entrypoint import: `import { ... } from '@codesoul-co/hypha-domain';`
 - Public exports: **81**
+- Source modules: **2**
 
 ## Export overview
 
@@ -18,18 +19,11 @@ Domain Pack validation and compilation into runtime-owned contracts.
 
 ## Source modules
 
-| Module | Exports | Source |
-| --- | ---: | --- |
-| [`index`](/api/domain/entrypoint) | 80 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/domain/src/index.ts) |
-| [`research-evidence-example`](/api/domain/research-evidence-example) | 1 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/domain/src/research-evidence-example.ts) |
+| Module | Use when | Exports | Source |
+| --- | --- | ---: | --- |
+| [`index`](/api/domain/entrypoint) | Aggregates the public entrypoint exports for `@codesoul-co/hypha-domain`; applications import these symbols from the package entrypoint instead of internal file paths. | 80 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/domain/src/index.ts) |
+| [`research-evidence-example`](/api/domain/research-evidence-example) | Use the Research evidence example module for using the public contracts and operations for this capability boundary. It exports 1 constant. | 1 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/domain/src/research-evidence-example.ts) |
 
-## Reading order
+## Import boundary
 
-Choose a source module above, then inspect its exported symbols, signatures, descriptions and public class/interface members. Every module page links back to the implementation source.
-
-## Usage conventions
-
-- Import from the package entrypoint instead of relying on unexported internal files.
-- Parse configuration, network requests and persisted data with runtime schemas.
-- Classes provide runtime behavior while specs/interfaces define cross-module contracts; do not leak provider SDK types into Core.
-- Use the [runnable examples](/guide/examples) to verify real call order.
+This page documents only the public API exported by the `@codesoul-co/hypha-domain` package entrypoint. Implementations under `packages/domain/src` that are not exported from that entrypoint are not part of the npm package contract.

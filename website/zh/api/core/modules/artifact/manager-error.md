@@ -1,31 +1,228 @@
 # `@codesoul-co/hypha-core` / `modules/artifact/manager-error`
 
 - 包索引: [`@codesoul-co/hypha-core`](/zh/api/core)
-- 模块指南: [学习与组合说明](/zh/packages/core)
 - 源码: [`packages/core/src/modules/artifact/manager-error.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
 - 导出数: **6**
+
+## 模块用法
+
+用于规范化、分类或暴露错误契约。Manager error 模块公开 1 类、5 函数。
+
+### 从包入口导入
+
+```ts
+import {
+  ArtifactManagerError,
+  artifactManagerError,
+  normalizedArtifactErrorCode,
+  validateArtifactManagerInput,
+  validateArtifactRepositoryOutput,
+  validateArtifactStoreOutput,
+} from '@codesoul-co/hypha-core';
+```
+
+### 使用要点
+
+- 1 个类提供可实例化的运行时实现；构造参数与公开方法在各自条目中完整列出。
+- 5 个函数是该模块的直接操作入口；每个 overload 的必需/可选参数与返回类型均在下方列出。
+
 
 ## 公共导出
 
 | Symbol | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `ArtifactManagerError` | 类 | <code>new ArtifactManagerError(normalizedError: NormalizedArtifactError): ArtifactManagerError</code> | Artifact Manager Error 的运行时实现；公开构造函数与成员见下表。 |
-| `artifactManagerError` | 函数 | <code>artifactManagerError(code: NormalizedArtifactError["code"], message: string, retryable?: boolean, details?: Record&lt;string, unknown&gt;): ArtifactManagerError</code> | artifact Manager Error 的公开运行时操作。 |
-| `normalizedArtifactErrorCode` | 函数 | <code>normalizedArtifactErrorCode(error: unknown): NormalizedArtifactError["code"] &#124; undefined</code> | 规范化 d Artifact Error Code。 |
-| `validateArtifactManagerInput` | 函数 | <code>validateArtifactManagerInput&lt;T&gt;(validate: () =&gt; T): T</code> | 校验 Artifact Manager Input。 |
-| `validateArtifactRepositoryOutput` | 函数 | <code>validateArtifactRepositoryOutput&lt;T&gt;(validate: () =&gt; T): T</code> | 校验 Artifact Repository Output。 |
-| `validateArtifactStoreOutput` | 函数 | <code>validateArtifactStoreOutput&lt;T&gt;(validate: () =&gt; T): T</code> | 校验 Artifact Store Output。 |
+| `ArtifactManagerError` | 类 | <code>new ArtifactManagerError(normalizedError: NormalizedArtifactError): ArtifactManagerError</code> | Artifact Manager Error 类，共公开 9 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `artifactManagerError` | 函数 | <code>artifactManagerError(code: NormalizedArtifactError["code"], message: string, retryable?: boolean, details?: Record&lt;string, unknown&gt;): ArtifactManagerError</code> | Artifact Manager Error 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `normalizedArtifactErrorCode` | 函数 | <code>normalizedArtifactErrorCode(error: unknown): NormalizedArtifactError["code"] &#124; undefined</code> | Normalized Artifact Error Code 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `validateArtifactManagerInput` | 函数 | <code>validateArtifactManagerInput&lt;T&gt;(validate: () =&gt; T): T</code> | Validate Artifact Manager Input 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `validateArtifactRepositoryOutput` | 函数 | <code>validateArtifactRepositoryOutput&lt;T&gt;(validate: () =&gt; T): T</code> | Validate Artifact Repository Output 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `validateArtifactStoreOutput` | 函数 | <code>validateArtifactStoreOutput&lt;T&gt;(validate: () =&gt; T): T</code> | Validate Artifact Store Output 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
 
-## `ArtifactManagerError` 公开成员
+## `ArtifactManagerError`
+
+Artifact Manager Error 类，共公开 9 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { ArtifactManagerError } from '@codesoul-co/hypha-core';`
+- 源码模块: [`modules/artifact/manager-error`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
+
+### 声明
+
+```text
+export declare class ArtifactManagerError extends Error {
+    readonly normalizedError: NormalizedArtifactError;
+    constructor(normalizedError: NormalizedArtifactError);
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `cause` | 属性 | <code>cause: unknown</code> | cause 字段。 |
+| `cause` | 属性 | <code>cause?: unknown</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 | `constructor` | 构造函数 | <code>(normalizedError: NormalizedArtifactError): ArtifactManagerError</code> | 创建该类的实例。 |
-| `message` | 属性 | <code>message: string</code> | message 字段。 |
-| `name` | 属性 | <code>name: string</code> | name 字段。 |
-| `normalizedError` | 属性 | <code>normalizedError: NormalizedArtifactError</code> | normalized Error 字段。 |
-| `stack` | 属性 | <code>stack: string</code> | stack 字段。 |
-| `static captureStackTrace` | 方法 | <code>captureStackTrace(targetObject: object, constructorOpt?: Function): void</code> | Creates a `.stack` property on `targetObject`, which when accessed returns a string representing the location in the code at which `Error.captureStackTrace()` was called. ```js const myObject = {}; Error.captureStackTrace(myObject); myObject.stack; // Similar to `new Error().stack` ``` The first line of the trace will be prefixed with `${myObject.name}: ${myObject.message}`. The optional `constructorOpt` argument accepts a function. If given, all frames above `constructorOpt`, including `constructorOpt`, will be omitted from the generated stack trace. The `constructorOpt` argument is useful for hiding implementation details of error generation from the user. For instance: ```js function a() { b(); } function b() { c(); } function c() { // Create an error without stack trace to avoid calculating the stack trace twice. const { stackTraceLimit } = Error; Error.stackTraceLimit = 0; const error = new Error(); Error.stackTraceLimit = stackTraceLimit; // Capture the stack trace above function b Error.captureStackTrace(error, b); // Neither function c, nor b is included in the stack trace throw error; } a(); ``` |
-| `static prepareStackTrace` | 方法 | <code>prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any</code> | prepare Stack Trace 的公开运行时操作。 |
-| `static stackTraceLimit` | 属性 | <code>stackTraceLimit: number</code> | The `Error.stackTraceLimit` property specifies the number of stack frames collected by a stack trace (whether generated by `new Error().stack` or `Error.captureStackTrace(obj)`). The default value is `10` but may be set to any valid JavaScript number. Changes will affect any stack trace captured _after_ the value has been changed. If set to a non-number value, or set to a negative number, stack traces will not capture any frames. |
+| `message` | 属性 | <code>message: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `name` | 属性 | <code>name: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `normalizedError` | 属性 | <code>readonly normalizedError: NormalizedArtifactError</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stack` | 属性 | <code>stack?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `static captureStackTrace` | 方法 | <code>static captureStackTrace(targetObject: object, constructorOpt?: Function): void</code> | Creates a `.stack` property on `targetObject`, which when accessed returns a string representing the location in the code at which `Error.captureStackTrace()` was called. ```js const myObject = {}; Error.captureStackTrace(myObject); myObject.stack; // Similar to `new Error().stack` ``` The first line of the trace will be prefixed with `${myObject.name}: ${myObject.message}`. The optional `constructorOpt` argument accepts a function. If given, all frames above `constructorOpt`, including `constructorOpt`, will be omitted from the generated stack trace. The `constructorOpt` argument is useful for hiding implementation details of error generation from the user. For instance: ```js function a() { b(); } function b() { c(); } function c() { // Create an error without stack trace to avoid calculating the stack trace twice. const { stackTraceLimit } = Error; Error.stackTraceLimit = 0; const error = new Error(); Error.stackTraceLimit = stackTraceLimit; // Capture the stack trace above function b Error.captureStackTrace(error, b); // Neither function c, nor b is included in the stack trace throw error; } a(); ``` |
+| `static prepareStackTrace` | 方法 | <code>static prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `static stackTraceLimit` | 属性 | <code>static stackTraceLimit: number</code> | The `Error.stackTraceLimit` property specifies the number of stack frames collected by a stack trace (whether generated by `new Error().stack` or `Error.captureStackTrace(obj)`). The default value is `10` but may be set to any valid JavaScript number. Changes will affect any stack trace captured _after_ the value has been changed. If set to a non-number value, or set to a negative number, stack traces will not capture any frames. |
+
+## `artifactManagerError`
+
+Artifact Manager Error 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { artifactManagerError } from '@codesoul-co/hypha-core';`
+- 源码模块: [`modules/artifact/manager-error`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
+
+### 声明
+
+```text
+export declare function artifactManagerError(code: NormalizedArtifactError['code'], message: string, retryable?: boolean, details?: Record<string, unknown>): ArtifactManagerError;
+```
+
+### 调用签名
+
+```text
+artifactManagerError(code: NormalizedArtifactError["code"], message: string, retryable?: boolean, details?: Record<string, unknown>): ArtifactManagerError
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `code` | <code>"ARTIFACT_INVALID_INPUT" &#124; "ARTIFACT_NOT_FOUND" &#124; "ARTIFACT_PERMISSION_DENIED" &#124; "ARTIFACT_TOO_LARGE" &#124; "ARTIFACT_TYPE_DENIED" &#124; "ARTIFACT_HASH_MISMATCH" &#124; "ARTIFACT_VERSION_CONFLICT" &#124; "ARTIFACT_STORE_UNAVAILABLE" &#124; "ARTIFACT_UPLOAD_FAILED" &#124; "ARTIFACT_DOWNLOAD_FAILED" &#124; "ARTIFACT_DELETE_BLOCKED" &#124; "ARTIFACT_DELETE_PARTIAL" &#124; "ARTIFACT_VALIDATION_FAILED" &#124; "ARTIFACT_INTERNAL_ERROR"</code> | 是 | 必需参数；接受的值由类型列定义。 |
+| `message` | <code>string</code> | 是 | 必需参数；接受的值由类型列定义。 |
+| `retryable` | <code>boolean</code> | 否 | 可选参数；接受的值由类型列定义。 |
+| `details` | <code>Record&lt;string, unknown&gt;</code> | 否 | 可选参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `ArtifactManagerError`
+- 说明: 返回值契约由上述类型定义。
+
+## `normalizedArtifactErrorCode`
+
+Normalized Artifact Error Code 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { normalizedArtifactErrorCode } from '@codesoul-co/hypha-core';`
+- 源码模块: [`modules/artifact/manager-error`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
+
+### 声明
+
+```text
+export declare function normalizedArtifactErrorCode(error: unknown): NormalizedArtifactError['code'] | undefined;
+```
+
+### 调用签名
+
+```text
+normalizedArtifactErrorCode(error: unknown): NormalizedArtifactError["code"] | undefined
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `error` | <code>unknown</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `"ARTIFACT_INVALID_INPUT" | "ARTIFACT_NOT_FOUND" | "ARTIFACT_PERMISSION_DENIED" | "ARTIFACT_TOO_LARGE" | "ARTIFACT_TYPE_DENIED" | "ARTIFACT_HASH_MISMATCH" | "ARTIFACT_VERSION_CONFLICT" | "ARTIFACT_STORE_UNAVAILABLE" | "ARTIFACT_UPLOAD_FAILED" | "ARTIFACT_DOWNLOAD_FAILED" | "ARTIFACT_DELETE_BLOCKED" | "ARTIFACT_DELETE_PARTIAL" | "ARTIFACT_VALIDATION_FAILED" | "ARTIFACT_INTERNAL_ERROR"`
+- 说明: 返回值契约由上述类型定义。
+
+## `validateArtifactManagerInput`
+
+Validate Artifact Manager Input 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { validateArtifactManagerInput } from '@codesoul-co/hypha-core';`
+- 源码模块: [`modules/artifact/manager-error`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
+
+### 声明
+
+```text
+export declare function validateArtifactManagerInput<T>(validate: () => T): T;
+```
+
+### 调用签名
+
+```text
+validateArtifactManagerInput<T>(validate: () => T): T
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `validate` | <code>() =&gt; T</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `T`
+- 说明: 返回值契约由上述类型定义。
+
+## `validateArtifactRepositoryOutput`
+
+Validate Artifact Repository Output 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { validateArtifactRepositoryOutput } from '@codesoul-co/hypha-core';`
+- 源码模块: [`modules/artifact/manager-error`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
+
+### 声明
+
+```text
+export declare function validateArtifactRepositoryOutput<T>(validate: () => T): T;
+```
+
+### 调用签名
+
+```text
+validateArtifactRepositoryOutput<T>(validate: () => T): T
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `validate` | <code>() =&gt; T</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `T`
+- 说明: 返回值契约由上述类型定义。
+
+## `validateArtifactStoreOutput`
+
+Validate Artifact Store Output 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { validateArtifactStoreOutput } from '@codesoul-co/hypha-core';`
+- 源码模块: [`modules/artifact/manager-error`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/artifact/manager-error.ts)
+
+### 声明
+
+```text
+export declare function validateArtifactStoreOutput<T>(validate: () => T): T;
+```
+
+### 调用签名
+
+```text
+validateArtifactStoreOutput<T>(validate: () => T): T
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `validate` | <code>() =&gt; T</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `T`
+- 说明: 返回值契约由上述类型定义。

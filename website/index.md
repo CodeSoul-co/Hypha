@@ -58,4 +58,4 @@ features:
 
 ## A framework boundary, not an application template
 
-Hypha supplies contracts and execution boundaries. Your application supplies the Domain Pack, prompts, workflows, capability selections, policies and deployment overlay. Start with the [feature map](/guide/capability-map), choose the [packages](/packages/) needed by your composition, then use the [complete API](/api/) for exact modules and symbols.
+Hypha supplies contracts and execution boundaries. Your application supplies the Domain Pack, prompts, workflows, capability selections, policies and deployment overlay. The [complete API reference](/api/) documents every public package export, declaration, parameter, return value and member; [runnable examples](/guide/examples) show those APIs in application code.

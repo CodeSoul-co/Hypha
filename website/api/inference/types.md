@@ -1,433 +1,1280 @@
 # `@codesoul-co/hypha-inference` / `types`
 
 - Package index: [`@codesoul-co/hypha-inference`](/api/inference)
-- Package guide: [learning and composition guide](/packages/inference)
 - Source: [`packages/inference/src/types.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 - Exports: **41**
+
+## Using this module
+
+Use the Types module for declaring and runtime-validating contracts. It exports 34 interfaces, 7 types.
+
+### Import from the package entrypoint
+
+```ts
+import type {
+  CompiledPrompt,
+  InferenceBackend,
+  InferenceBackendCapabilities,
+  InferenceBackendRegistryEntry,
+  InferenceBackendRequest,
+  InferenceBackendResponse,
+  InferenceCacheIssue,
+  InferenceCachePolicy,
+} from '@codesoul-co/hypha-inference';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 41 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `CompiledPrompt` | interface | <code>interface CompiledPrompt</code> | Field contract for Compiled Prompt; see all contract members below. |
-| `InferenceBackend` | interface | <code>interface InferenceBackend</code> | Field contract for Inference Backend; see all contract members below. |
-| `InferenceBackendCapabilities` | interface | <code>interface InferenceBackendCapabilities</code> | Field contract for Inference Backend Capabilities; see all contract members below. |
-| `InferenceBackendRegistryEntry` | interface | <code>interface InferenceBackendRegistryEntry</code> | Field contract for Inference Backend Registry Entry; see all contract members below. |
-| `InferenceBackendRequest` | interface | <code>interface InferenceBackendRequest</code> | Field contract for Inference Backend Request; see all contract members below. |
-| `InferenceBackendResponse` | interface | <code>interface InferenceBackendResponse</code> | Field contract for Inference Backend Response; see all contract members below. |
-| `InferenceCacheIssue` | interface | <code>interface InferenceCacheIssue</code> | Field contract for Inference Cache Issue; see all contract members below. |
-| `InferenceCachePolicy` | interface | <code>interface InferenceCachePolicy</code> | Field contract for Inference Cache Policy; see all contract members below. |
-| `InferenceCacheScope` | interface | <code>interface InferenceCacheScope</code> | Field contract for Inference Cache Scope; see all contract members below. |
-| `InferenceCacheUsage` | interface | <code>interface InferenceCacheUsage</code> | Field contract for Inference Cache Usage; see all contract members below. |
-| `InferenceGenerationOptions` | interface | <code>interface InferenceGenerationOptions</code> | Field contract for Inference Generation Options; see all contract members below. |
-| `InferenceManagerOptions` | interface | <code>interface InferenceManagerOptions</code> | Field contract for Inference Manager Options; see all contract members below. |
-| `InferenceProvider` | interface | <code>interface InferenceProvider</code> | Field contract for Inference Provider; see all contract members below. |
-| `InferenceRequest` | interface | <code>interface InferenceRequest</code> | Field contract for Inference Request; see all contract members below. |
-| `InferenceResponse` | interface | <code>interface InferenceResponse</code> | Field contract for Inference Response; see all contract members below. |
-| `InferenceToolDescriptor` | interface | <code>interface InferenceToolDescriptor</code> | Field contract for Inference Tool Descriptor; see all contract members below. |
-| `InferenceUsage` | interface | <code>interface InferenceUsage</code> | Field contract for Inference Usage; see all contract members below. |
-| `KvCacheProvider` | interface | <code>interface KvCacheProvider</code> | Field contract for Kv Cache Provider; see all contract members below. |
-| `KvCacheRef` | interface | <code>interface KvCacheRef</code> | Field contract for Kv Cache Ref; see all contract members below. |
-| `KvCacheWritePolicy` | interface | <code>interface KvCacheWritePolicy</code> | Field contract for Kv Cache Write Policy; see all contract members below. |
-| `PlasmodCacheMetadata` | interface | <code>interface PlasmodCacheMetadata</code> | Field contract for Plasmod Cache Metadata; see all contract members below. |
-| `PlasmodHotLayer` | interface | <code>interface PlasmodHotLayer</code> | Field contract for Plasmod Hot Layer; see all contract members below. |
-| `PlasmodHotLayerPrepareInput` | interface | <code>interface PlasmodHotLayerPrepareInput</code> | Field contract for Plasmod Hot Layer Prepare Input; see all contract members below. |
-| `PlasmodHotLayerPrepareResult` | interface | <code>interface PlasmodHotLayerPrepareResult</code> | Field contract for Plasmod Hot Layer Prepare Result; see all contract members below. |
-| `PlasmodReusePolicy` | interface | <code>interface PlasmodReusePolicy</code> | Field contract for Plasmod Reuse Policy; see all contract members below. |
-| `PlasmodSessionState` | interface | <code>interface PlasmodSessionState</code> | Field contract for Plasmod Session State; see all contract members below. |
-| `PrefixCacheProvider` | interface | <code>interface PrefixCacheProvider</code> | Field contract for Prefix Cache Provider; see all contract members below. |
-| `PrefixCacheRef` | interface | <code>interface PrefixCacheRef</code> | Field contract for Prefix Cache Ref; see all contract members below. |
-| `PrefixSegment` | interface | <code>interface PrefixSegment</code> | Field contract for Prefix Segment; see all contract members below. |
-| `PrefixSegmentationResult` | interface | <code>interface PrefixSegmentationResult</code> | Field contract for Prefix Segmentation Result; see all contract members below. |
-| `PrefixSegmenter` | interface | <code>interface PrefixSegmenter</code> | Field contract for Prefix Segmenter; see all contract members below. |
-| `PromptCompileInput` | interface | <code>interface PromptCompileInput</code> | Field contract for Prompt Compile Input; see all contract members below. |
-| `PromptCompiler` | interface | <code>interface PromptCompiler</code> | Field contract for Prompt Compiler; see all contract members below. |
-| `PromptMessage` | interface | <code>interface PromptMessage</code> | Field contract for Prompt Message; see all contract members below. |
-| `InferenceBackendKind` | type | <code>type InferenceBackendKind = 'ollama' &#124; 'sglang' &#124; 'vllm' &#124; 'llama.cpp' &#124; 'openai-api'</code> | Public type alias for Inference Backend Kind. |
-| `InferenceCacheMissReason` | type | <code>type InferenceCacheMissReason = 'missing' &#124; 'expired' &#124; 'not_configured' &#124; 'error'</code> | Public type alias for Inference Cache Miss Reason. |
-| `KvCacheScope` | type | <code>type KvCacheScope = 'run' &#124; 'session' &#124; 'workspace'</code> | Public type alias for Kv Cache Scope. |
-| `KvCacheWriteMode` | type | <code>type KvCacheWriteMode = 'write_through' &#124; 'write_if_missing' &#124; 'refresh'</code> | Public type alias for Kv Cache Write Mode. |
-| `PrefixSegmentKind` | type | <code>type PrefixSegmentKind = 'system' &#124; 'developer' &#124; 'context' &#124; 'memory' &#124; 'tool' &#124; 'user' &#124; 'assistant'</code> | Public type alias for Prefix Segment Kind. |
-| `PrefixSegmentScope` | type | <code>type PrefixSegmentScope = 'global' &#124; 'agent' &#124; 'session' &#124; 'run' &#124; 'dynamic'</code> | Public type alias for Prefix Segment Scope. |
-| `PromptRole` | type | <code>type PromptRole = 'system' &#124; 'developer' &#124; 'user' &#124; 'assistant' &#124; 'tool' &#124; 'context' &#124; 'memory'</code> | Public type alias for Prompt Role. |
+| `CompiledPrompt` | interface | <code>interface CompiledPrompt</code> | Compiled Prompt interface with 4 public fields or methods. |
+| `InferenceBackend` | interface | <code>interface InferenceBackend</code> | Inference Backend interface with 5 public fields or methods. |
+| `InferenceBackendCapabilities` | interface | <code>interface InferenceBackendCapabilities</code> | Inference Backend Capabilities interface with 6 public fields or methods. |
+| `InferenceBackendRegistryEntry` | interface | <code>interface InferenceBackendRegistryEntry</code> | Inference Backend Registry Entry interface with 3 public fields or methods. |
+| `InferenceBackendRequest` | interface | <code>interface InferenceBackendRequest</code> | Inference Backend Request interface with 14 public fields or methods. |
+| `InferenceBackendResponse` | interface | <code>interface InferenceBackendResponse</code> | Inference Backend Response interface with 6 public fields or methods. |
+| `InferenceCacheIssue` | interface | <code>interface InferenceCacheIssue</code> | Inference Cache Issue interface with 4 public fields or methods. |
+| `InferenceCachePolicy` | interface | <code>interface InferenceCachePolicy</code> | Inference Cache Policy interface with 3 public fields or methods. |
+| `InferenceCacheScope` | interface | <code>interface InferenceCacheScope</code> | Inference Cache Scope interface with 3 public fields or methods. |
+| `InferenceCacheUsage` | interface | <code>interface InferenceCacheUsage</code> | Inference Cache Usage interface with 11 public fields or methods. |
+| `InferenceGenerationOptions` | interface | <code>interface InferenceGenerationOptions</code> | Inference Generation Options interface with 9 public fields or methods. |
+| `InferenceManagerOptions` | interface | <code>interface InferenceManagerOptions</code> | Inference Manager Options interface with 8 public fields or methods. |
+| `InferenceProvider` | interface | <code>interface InferenceProvider</code> | Inference Provider interface with 3 public fields or methods. |
+| `InferenceRequest` | interface | <code>interface InferenceRequest</code> | Inference Request interface with 18 public fields or methods. |
+| `InferenceResponse` | interface | <code>interface InferenceResponse</code> | Inference Response interface with 7 public fields or methods. |
+| `InferenceToolDescriptor` | interface | <code>interface InferenceToolDescriptor</code> | Inference Tool Descriptor interface with 4 public fields or methods. |
+| `InferenceUsage` | interface | <code>interface InferenceUsage</code> | Inference Usage interface with 3 public fields or methods. |
+| `KvCacheProvider` | interface | <code>interface KvCacheProvider</code> | Kv Cache Provider interface with 3 public fields or methods. |
+| `KvCacheRef` | interface | <code>interface KvCacheRef</code> | Kv Cache Ref interface with 7 public fields or methods. |
+| `KvCacheWritePolicy` | interface | <code>interface KvCacheWritePolicy</code> | Kv Cache Write Policy interface with 3 public fields or methods. |
+| `PlasmodCacheMetadata` | interface | <code>interface PlasmodCacheMetadata</code> | Plasmod Cache Metadata interface with 10 public fields or methods. |
+| `PlasmodHotLayer` | interface | <code>interface PlasmodHotLayer</code> | Plasmod Hot Layer interface with 4 public fields or methods. |
+| `PlasmodHotLayerPrepareInput` | interface | <code>interface PlasmodHotLayerPrepareInput</code> | Plasmod Hot Layer Prepare Input interface with 12 public fields or methods. |
+| `PlasmodHotLayerPrepareResult` | interface | <code>interface PlasmodHotLayerPrepareResult</code> | Plasmod Hot Layer Prepare Result interface with 6 public fields or methods. |
+| `PlasmodReusePolicy` | interface | <code>interface PlasmodReusePolicy</code> | Plasmod Reuse Policy interface with 5 public fields or methods. |
+| `PlasmodSessionState` | interface | <code>interface PlasmodSessionState</code> | Plasmod Session State interface with 10 public fields or methods. |
+| `PrefixCacheProvider` | interface | <code>interface PrefixCacheProvider</code> | Prefix Cache Provider interface with 3 public fields or methods. |
+| `PrefixCacheRef` | interface | <code>interface PrefixCacheRef</code> | Prefix Cache Ref interface with 6 public fields or methods. |
+| `PrefixSegment` | interface | <code>interface PrefixSegment</code> | Prefix Segment interface with 9 public fields or methods. |
+| `PrefixSegmentationResult` | interface | <code>interface PrefixSegmentationResult</code> | Prefix Segmentation Result interface with 5 public fields or methods. |
+| `PrefixSegmenter` | interface | <code>interface PrefixSegmenter</code> | Prefix Segmenter interface with 1 public fields or methods. |
+| `PromptCompileInput` | interface | <code>interface PromptCompileInput</code> | Prompt Compile Input interface with 11 public fields or methods. |
+| `PromptCompiler` | interface | <code>interface PromptCompiler</code> | Prompt Compiler interface with 1 public fields or methods. |
+| `PromptMessage` | interface | <code>interface PromptMessage</code> | Prompt Message interface with 4 public fields or methods. |
+| `InferenceBackendKind` | type | <code>type InferenceBackendKind = 'ollama' &#124; 'sglang' &#124; 'vllm' &#124; 'llama.cpp' &#124; 'openai-api'</code> | Public type alias for Inference Backend Kind; the declaration contains its complete type expression. |
+| `InferenceCacheMissReason` | type | <code>type InferenceCacheMissReason = 'missing' &#124; 'expired' &#124; 'not_configured' &#124; 'error'</code> | Public type alias for Inference Cache Miss Reason; the declaration contains its complete type expression. |
+| `KvCacheScope` | type | <code>type KvCacheScope = 'run' &#124; 'session' &#124; 'workspace'</code> | Public type alias for Kv Cache Scope; the declaration contains its complete type expression. |
+| `KvCacheWriteMode` | type | <code>type KvCacheWriteMode = 'write_through' &#124; 'write_if_missing' &#124; 'refresh'</code> | Public type alias for Kv Cache Write Mode; the declaration contains its complete type expression. |
+| `PrefixSegmentKind` | type | <code>type PrefixSegmentKind = 'system' &#124; 'developer' &#124; 'context' &#124; 'memory' &#124; 'tool' &#124; 'user' &#124; 'assistant'</code> | Public type alias for Prefix Segment Kind; the declaration contains its complete type expression. |
+| `PrefixSegmentScope` | type | <code>type PrefixSegmentScope = 'global' &#124; 'agent' &#124; 'session' &#124; 'run' &#124; 'dynamic'</code> | Public type alias for Prefix Segment Scope; the declaration contains its complete type expression. |
+| `PromptRole` | type | <code>type PromptRole = 'system' &#124; 'developer' &#124; 'user' &#124; 'assistant' &#124; 'tool' &#124; 'context' &#124; 'memory'</code> | Public type alias for Prompt Role; the declaration contains its complete type expression. |
 
-## `CompiledPrompt` contract members
+## `CompiledPrompt`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `messages` | property | <code>messages: PromptMessage[]</code> | Public messages property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `text` | property | <code>text: string</code> | Public text property. |
+Compiled Prompt interface with 4 public fields or methods.
 
-## `InferenceBackend` contract members
+- Kind: interface
+- Import: `import type { CompiledPrompt } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public runtime operation for capabilities. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for infer. |
-| `kind` | property | <code>kind: InferenceBackendKind</code> | Public kind property. |
-| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for stream. |
+### Declaration
 
-## `InferenceBackendCapabilities` contract members
+```text
+export interface CompiledPrompt {
+    id: string;
+    messages: PromptMessage[];
+    text: string;
+    metadata?: Record<string, unknown>;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cacheInvalidation` | property | <code>cacheInvalidation: boolean</code> | Public cache Invalidation property. |
-| `chatCompletions` | property | <code>chatCompletions: boolean</code> | Public chat Completions property. |
-| `kvCaching` | property | <code>kvCaching: boolean</code> | Public kv Caching property. |
-| `prefixCaching` | property | <code>prefixCaching: boolean</code> | Public prefix Caching property. |
-| `streaming` | property | <code>streaming: boolean</code> | Public streaming property. |
-| `textCompletions` | property | <code>textCompletions: boolean</code> | Public text Completions property. |
-
-## `InferenceBackendRegistryEntry` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `backend` | property | <code>backend: InferenceBackend</code> | Public backend property. |
-| `default` | property | <code>default: boolean</code> | Public default property. |
-| `id` | property | <code>id: string</code> | Public id property. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messages` | property | <code>messages: PromptMessage[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `text` | property | <code>text: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `InferenceBackendRequest` contract members
+## `InferenceBackend`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agentId` | property | <code>agentId: string</code> | Public agent Id property. |
-| `compiledPrompt` | property | <code>compiledPrompt: CompiledPrompt</code> | Public compiled Prompt property. |
-| `kvCache` | property | <code>kvCache: KvCacheRef</code> | Public kv Cache property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `options` | property | <code>options: InferenceGenerationOptions</code> | Public options property. |
-| `physicalKvCache` | property | <code>physicalKvCache: unknown</code> | Public physical Kv Cache property. |
-| `prefixRefs` | property | <code>prefixRefs: PrefixCacheRef[]</code> | Public prefix Refs property. |
-| `resolvedKvCacheValue` | property | <code>resolvedKvCacheValue: unknown</code> | Public resolved Kv Cache Value property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `segmentation` | property | <code>segmentation: PrefixSegmentationResult</code> | Public segmentation property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `tools` | property | <code>tools: InferenceToolDescriptor[]</code> | Public tools property. |
+Inference Backend interface with 5 public fields or methods.
 
-## `InferenceBackendResponse` contract members
+- Kind: interface
+- Import: `import type { InferenceBackend } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `output` | property | <code>output: TOutput</code> | Public output property. |
-| `physicalKvCache` | property | <code>physicalKvCache: unknown</code> | Public physical Kv Cache property. |
-| `raw` | property | <code>raw: unknown</code> | Public raw property. |
-| `usage` | property | <code>usage: InferenceUsage</code> | Public usage property. |
+### Declaration
 
-## `InferenceCacheIssue` contract members
+```text
+export interface InferenceBackend {
+    id: string;
+    kind: InferenceBackendKind;
+    capabilities(): InferenceBackendCapabilities;
+    infer(request: InferenceBackendRequest): Promise<InferenceBackendResponse>;
+    stream?(request: InferenceBackendRequest): AsyncIterable<InferenceBackendResponse>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `bypassed` | property | <code>bypassed: boolean</code> | Public bypassed property. |
-| `code` | property | <code>code: string</code> | Public code property. |
-| `message` | property | <code>message: string</code> | Public message property. |
-| `operation` | property | <code>operation: "prefix_read" &#124; "kv_read" &#124; "kv_write" &#124; "invalidate"</code> | Public operation property. |
+| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public method; parameters and return type are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `kind` | property | <code>kind: InferenceBackendKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | method | <code>stream?(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `InferenceCachePolicy` contract members
+## `InferenceBackendCapabilities`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `kvCache` | property | <code>kvCache: KvCacheRef</code> | Public kv Cache property. |
-| `prefix` | property | <code>prefix: PrefixCacheRef</code> | Public prefix property. |
-| `writeKvCache` | property | <code>writeKvCache: KvCacheWritePolicy</code> | Public write Kv Cache property. |
+Inference Backend Capabilities interface with 6 public fields or methods.
 
-## `InferenceCacheScope` contract members
+- Kind: interface
+- Import: `import type { InferenceBackendCapabilities } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `tenantId` | property | <code>tenantId: string</code> | Public tenant Id property. |
-| `userId` | property | <code>userId: string</code> | Public user Id property. |
-| `workspaceId` | property | <code>workspaceId: string</code> | Public workspace Id property. |
+### Declaration
 
-## `InferenceCacheUsage` contract members
+```text
+export interface InferenceBackendCapabilities {
+    streaming: boolean;
+    chatCompletions: boolean;
+    textCompletions: boolean;
+    prefixCaching: boolean;
+    kvCaching: boolean;
+    cacheInvalidation: boolean;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `bypassed` | property | <code>bypassed: boolean</code> | Public bypassed property. |
-| `issues` | property | <code>issues: InferenceCacheIssue[]</code> | Public issues property. |
-| `kvCacheHit` | property | <code>kvCacheHit: boolean</code> | Public kv Cache Hit property. |
-| `kvCacheMissReason` | property | <code>kvCacheMissReason: InferenceCacheMissReason</code> | Public kv Cache Miss Reason property. |
-| `kvCacheRef` | property | <code>kvCacheRef: KvCacheRef</code> | Public kv Cache Ref property. |
-| `kvCacheWriteRef` | property | <code>kvCacheWriteRef: KvCacheRef</code> | Public kv Cache Write Ref property. |
-| `kvCacheWritten` | property | <code>kvCacheWritten: boolean</code> | Public kv Cache Written property. |
-| `prefixHit` | property | <code>prefixHit: boolean</code> | Public prefix Hit property. |
-| `prefixRef` | property | <code>prefixRef: PrefixCacheRef</code> | Public prefix Ref property. |
-| `reusedTokens` | property | <code>reusedTokens: number</code> | Public reused Tokens property. |
-| `servingCache` | property | <code>servingCache: Record&lt;string, unknown&gt;</code> | Public serving Cache property. |
-
-## `InferenceGenerationOptions` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `extra` | property | <code>extra: Record&lt;string, unknown&gt;</code> | Public extra property. |
-| `maxTokens` | property | <code>maxTokens: number</code> | Public max Tokens property. |
-| `responseFormat` | property | <code>responseFormat: "text" &#124; "json_object" &#124; { type: string; schema?: unknown; }</code> | Public response Format property. |
-| `seed` | property | <code>seed: number</code> | Public seed property. |
-| `stop` | property | <code>stop: string[]</code> | Public stop property. |
-| `stream` | property | <code>stream: boolean</code> | Public stream property. |
-| `temperature` | property | <code>temperature: number</code> | Public temperature property. |
-| `topK` | property | <code>topK: number</code> | Public top K property. |
-| `topP` | property | <code>topP: number</code> | Public top P property. |
+| `cacheInvalidation` | property | <code>cacheInvalidation: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `chatCompletions` | property | <code>chatCompletions: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCaching` | property | <code>kvCaching: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixCaching` | property | <code>prefixCaching: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `streaming` | property | <code>streaming: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `textCompletions` | property | <code>textCompletions: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `InferenceManagerOptions` contract members
+## `InferenceBackendRegistryEntry`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cacheFailureMode` | property | <code>cacheFailureMode: "strict" &#124; "bypass"</code> | Public cache Failure Mode property. |
-| `cacheOperationTimeoutMs` | property | <code>cacheOperationTimeoutMs: number</code> | Public cache Operation Timeout Ms property. |
-| `kvCache` | property | <code>kvCache: KvCacheProvider</code> | Public kv Cache property. |
-| `onRecoveryFailure` | method | <code>onRecoveryFailure(failure: RecoveryFailure): void &#124; Promise&lt;void&gt;</code> | Handles Recovery Failure at this module boundary. |
-| `policyRevision` | property | <code>policyRevision: string</code> | Public policy Revision property. |
-| `prefixCache` | property | <code>prefixCache: PrefixCacheProvider</code> | Public prefix Cache property. |
-| `providerRevision` | property | <code>providerRevision: string</code> | Public provider Revision property. |
-| `specRevision` | property | <code>specRevision: string</code> | Public spec Revision property. |
+Inference Backend Registry Entry interface with 3 public fields or methods.
 
-## `InferenceProvider` contract members
+- Kind: interface
+- Import: `import type { InferenceBackendRegistryEntry } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceRequest): Promise&lt;InferenceResponse&gt;</code> | Public runtime operation for infer. |
-| `stream` | method | <code>stream(request: InferenceRequest): AsyncIterable&lt;InferenceResponse&gt;</code> | Public runtime operation for stream. |
+### Declaration
 
-## `InferenceRequest` contract members
+```text
+export interface InferenceBackendRegistryEntry {
+    id: string;
+    backend: InferenceBackend;
+    default?: boolean;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `agentId` | property | <code>agentId: string</code> | Public agent Id property. |
-| `backendId` | property | <code>backendId: string</code> | Public backend Id property. |
-| `cachePolicy` | property | <code>cachePolicy: InferenceCachePolicy</code> | Public cache Policy property. |
-| `cacheScope` | property | <code>cacheScope: InferenceCacheScope</code> | Public cache Scope property. |
-| `input` | property | <code>input: TInput</code> | Public input property. |
-| `kvCache` | property | <code>kvCache: KvCacheRef</code> | Public kv Cache property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `options` | property | <code>options: InferenceGenerationOptions</code> | Public options property. |
-| `prefix` | property | <code>prefix: PrefixCacheRef</code> | Public prefix property. |
-| `providerId` | property | <code>providerId: string</code> | Public provider Id property. |
-| `resolvedKvCacheValue` | property | <code>resolvedKvCacheValue: unknown</code> | Public resolved Kv Cache Value property. |
-| `resolvedPrefixContent` | property | <code>resolvedPrefixContent: string</code> | Public resolved Prefix Content property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `tools` | property | <code>tools: InferenceToolDescriptor[]</code> | Public tools property. |
-| `trace` | property | <code>trace: boolean</code> | Public trace property. |
+| `backend` | property | <code>backend: InferenceBackend</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `default` | property | <code>default?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `InferenceResponse` contract members
+## `InferenceBackendRequest`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cache` | property | <code>cache: InferenceCacheUsage</code> | Public cache property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `nextKvCacheValue` | property | <code>nextKvCacheValue: unknown</code> | Public next Kv Cache Value property. |
-| `output` | property | <code>output: TOutput</code> | Public output property. |
-| `raw` | property | <code>raw: unknown</code> | Public raw property. |
-| `usage` | property | <code>usage: InferenceUsage</code> | Public usage property. |
+Inference Backend Request interface with 14 public fields or methods.
 
-## `InferenceToolDescriptor` contract members
+- Kind: interface
+- Import: `import type { InferenceBackendRequest } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `inputSchema` | property | <code>inputSchema: Record&lt;string, unknown&gt;</code> | Public input schema property. |
-| `name` | property | <code>name: string</code> | Public name property. |
+### Declaration
 
-## `InferenceUsage` contract members
+```text
+export interface InferenceBackendRequest {
+    runId: string;
+    stepId: string;
+    sessionId?: string;
+    agentId?: string;
+    modelAlias: string;
+    compiledPrompt: CompiledPrompt;
+    segmentation: PrefixSegmentationResult;
+    prefixRefs: PrefixCacheRef[];
+    kvCache?: KvCacheRef;
+    resolvedKvCacheValue?: unknown;
+    physicalKvCache?: unknown;
+    options?: InferenceGenerationOptions;
+    tools?: InferenceToolDescriptor[];
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `inputTokens` | property | <code>inputTokens: number</code> | Public input Tokens property. |
-| `outputTokens` | property | <code>outputTokens: number</code> | Public output Tokens property. |
-| `totalTokens` | property | <code>totalTokens: number</code> | Public total Tokens property. |
+| `agentId` | property | <code>agentId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `compiledPrompt` | property | <code>compiledPrompt: CompiledPrompt</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCache` | property | <code>kvCache?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `options` | property | <code>options?: InferenceGenerationOptions</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `physicalKvCache` | property | <code>physicalKvCache?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixRefs` | property | <code>prefixRefs: PrefixCacheRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolvedKvCacheValue` | property | <code>resolvedKvCacheValue?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `segmentation` | property | <code>segmentation: PrefixSegmentationResult</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tools` | property | <code>tools?: InferenceToolDescriptor[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `KvCacheProvider` contract members
+## `InferenceBackendResponse`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `get` | method | <code>get(ref: KvCacheRef): Promise&lt;unknown &#124; null&gt;</code> | Gets get at this module boundary. |
-| `invalidate` | method | <code>invalidate(ref: KvCacheRef, reason: string): Promise&lt;void&gt;</code> | Public runtime operation for invalidate. |
-| `put` | method | <code>put(ref: KvCacheRef, value: unknown): Promise&lt;void&gt;</code> | Public runtime operation for put. |
+Inference Backend Response interface with 6 public fields or methods.
 
-## `KvCacheRef` contract members
+- Kind: interface
+- Import: `import type { InferenceBackendResponse } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cacheScope` | property | <code>cacheScope: InferenceCacheScope</code> | Public cache Scope property. |
-| `expiresAt` | property | <code>expiresAt: string</code> | Public expires At property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `provider` | property | <code>provider: string</code> | Public provider property. |
-| `scope` | property | <code>scope: KvCacheScope</code> | Public scope property. |
+### Declaration
 
-## `KvCacheWritePolicy` contract members
+```text
+export interface InferenceBackendResponse<TOutput = unknown> {
+    id: string;
+    output: TOutput;
+    usage?: InferenceUsage;
+    physicalKvCache?: unknown;
+    metadata?: Record<string, unknown>;
+    raw?: unknown;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `mode` | property | <code>mode: KvCacheWriteMode</code> | Public mode property. |
-| `ref` | property | <code>ref: KvCacheRef</code> | Public ref property. |
-| `value` | property | <code>value: unknown</code> | Public value property. |
-
-## `PlasmodCacheMetadata` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `backendId` | property | <code>backendId: string</code> | Public backend Id property. |
-| `contentHash` | property | <code>contentHash: string</code> | Public content Hash property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `reused` | property | <code>reused: boolean</code> | Public reused property. |
-| `scope` | property | <code>scope: PrefixSegmentScope</code> | Public scope property. |
-| `segmentId` | property | <code>segmentId: string</code> | Public segment Id property. |
-| `tokenCount` | property | <code>tokenCount: number</code> | Public token Count property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-
-## `PlasmodHotLayer` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `getCacheMetadata` | method | <code>getCacheMetadata(segmentId: string): PlasmodCacheMetadata &#124; null</code> | Gets Cache Metadata at this module boundary. |
-| `getSessionState` | method | <code>getSessionState(stateId: string): PlasmodSessionState &#124; null</code> | Gets Session State at this module boundary. |
-| `invalidateSegment` | method | <code>invalidateSegment(segmentId: string, reason: string): Promise&lt;void&gt;</code> | Public runtime operation for invalidate Segment. |
-| `prepare` | method | <code>prepare(input: PlasmodHotLayerPrepareInput): Promise&lt;PlasmodHotLayerPrepareResult&gt;</code> | Public runtime operation for prepare. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `output` | property | <code>output: TOutput</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `physicalKvCache` | property | <code>physicalKvCache?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `raw` | property | <code>raw?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `usage` | property | <code>usage?: InferenceUsage</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PlasmodHotLayerPrepareInput` contract members
+## `InferenceCacheIssue`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agentId` | property | <code>agentId: string</code> | Public agent Id property. |
-| `backendId` | property | <code>backendId: string</code> | Public backend Id property. |
-| `cacheScope` | property | <code>cacheScope: InferenceCacheScope</code> | Public cache Scope property. |
-| `kvCache` | property | <code>kvCache: KvCacheRef</code> | Public kv Cache property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `resolvedKvCacheValue` | property | <code>resolvedKvCacheValue: unknown</code> | Public resolved Kv Cache Value property. |
-| `reusePolicy` | property | <code>reusePolicy: PlasmodReusePolicy</code> | Public reuse Policy property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `segmentation` | property | <code>segmentation: PrefixSegmentationResult</code> | Public segmentation property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
+Inference Cache Issue interface with 4 public fields or methods.
 
-## `PlasmodHotLayerPrepareResult` contract members
+- Kind: interface
+- Import: `import type { InferenceCacheIssue } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `invalidatedSegmentIds` | property | <code>invalidatedSegmentIds: string[]</code> | Public invalidated Segment Ids property. |
-| `kvCacheRef` | property | <code>kvCacheRef: KvCacheRef</code> | Public kv Cache Ref property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `physicalKvCache` | property | <code>physicalKvCache: unknown</code> | Public physical Kv Cache property. |
-| `prefixRefs` | property | <code>prefixRefs: PrefixCacheRef[]</code> | Public prefix Refs property. |
-| `reusedSegmentIds` | property | <code>reusedSegmentIds: string[]</code> | Public reused Segment Ids property. |
+### Declaration
 
-## `PlasmodReusePolicy` contract members
+```text
+export interface InferenceCacheIssue {
+    operation: 'prefix_read' | 'kv_read' | 'kv_write' | 'invalidate';
+    code: string;
+    message: string;
+    bypassed: boolean;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `allowCrossAgent` | property | <code>allowCrossAgent: boolean</code> | Public allow Cross Agent property. |
-| `allowCrossSession` | property | <code>allowCrossSession: boolean</code> | Public allow Cross Session property. |
-| `maxPrefixRefs` | property | <code>maxPrefixRefs: number</code> | Public max Prefix Refs property. |
-| `minTokenCount` | property | <code>minTokenCount: number</code> | Public min Token Count property. |
-| `requireExactHash` | property | <code>requireExactHash: boolean</code> | Public require Exact Hash property. |
+| `bypassed` | property | <code>bypassed: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `code` | property | <code>code: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `message` | property | <code>message: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operation` | property | <code>operation: "prefix_read" &#124; "kv_read" &#124; "kv_write" &#124; "invalidate"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PlasmodSessionState` contract members
+## `InferenceCachePolicy`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agentId` | property | <code>agentId: string</code> | Public agent Id property. |
-| `backendId` | property | <code>backendId: string</code> | Public backend Id property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `kvCacheRef` | property | <code>kvCacheRef: KvCacheRef</code> | Public kv Cache Ref property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `prefixRefs` | property | <code>prefixRefs: PrefixCacheRef[]</code> | Public prefix Refs property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
+Inference Cache Policy interface with 3 public fields or methods.
 
-## `PrefixCacheProvider` contract members
+- Kind: interface
+- Import: `import type { InferenceCachePolicy } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `get` | method | <code>get(ref: PrefixCacheRef): Promise&lt;string &#124; null&gt;</code> | Gets get at this module boundary. |
-| `invalidate` | method | <code>invalidate(ref: PrefixCacheRef, reason: string): Promise&lt;void&gt;</code> | Public runtime operation for invalidate. |
-| `put` | method | <code>put(ref: PrefixCacheRef, content: string): Promise&lt;void&gt;</code> | Public runtime operation for put. |
+### Declaration
 
-## `PrefixCacheRef` contract members
+```text
+export interface InferenceCachePolicy {
+    prefix?: PrefixCacheRef;
+    kvCache?: KvCacheRef;
+    writeKvCache?: KvCacheWritePolicy;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `cacheScope` | property | <code>cacheScope: InferenceCacheScope</code> | Public cache Scope property. |
-| `contentHash` | property | <code>contentHash: string</code> | Public content Hash property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `tokenCount` | property | <code>tokenCount: number</code> | Public token Count property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+| `kvCache` | property | <code>kvCache?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefix` | property | <code>prefix?: PrefixCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `writeKvCache` | property | <code>writeKvCache?: KvCacheWritePolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PrefixSegment` contract members
+## `InferenceCacheScope`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cacheable` | property | <code>cacheable: boolean</code> | Public cacheable property. |
-| `content` | property | <code>content: string</code> | Public content property. |
-| `contentHash` | property | <code>contentHash: string</code> | Public content Hash property. |
-| `dependencies` | property | <code>dependencies: string[]</code> | Public dependencies property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `kind` | property | <code>kind: PrefixSegmentKind</code> | Public kind property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `scope` | property | <code>scope: PrefixSegmentScope</code> | Public scope property. |
-| `tokenCount` | property | <code>tokenCount: number</code> | Public token Count property. |
+Inference Cache Scope interface with 3 public fields or methods.
 
-## `PrefixSegmentationResult` contract members
+- Kind: interface
+- Import: `import type { InferenceCacheScope } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `compiled` | property | <code>compiled: CompiledPrompt</code> | Public compiled property. |
-| `dynamicPrompt` | property | <code>dynamicPrompt: string</code> | Public dynamic Prompt property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `segments` | property | <code>segments: PrefixSegment[]</code> | Public segments property. |
-| `stablePrefix` | property | <code>stablePrefix: string</code> | Public stable Prefix property. |
+### Declaration
 
-## `PrefixSegmenter` contract members
+```text
+export interface InferenceCacheScope {
+    tenantId?: string;
+    userId: string;
+    workspaceId?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `segment` | method | <code>segment(prompt: CompiledPrompt): Promise&lt;PrefixSegmentationResult&gt;</code> | Public runtime operation for segment. |
+| `tenantId` | property | <code>tenantId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `userId` | property | <code>userId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `workspaceId` | property | <code>workspaceId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PromptCompileInput` contract members
+## `InferenceCacheUsage`
+
+Inference Cache Usage interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceCacheUsage } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceCacheUsage {
+    prefixHit?: boolean;
+    kvCacheHit?: boolean;
+    servingCache?: Record<string, unknown>;
+    prefixRef?: PrefixCacheRef;
+    kvCacheRef?: KvCacheRef;
+    kvCacheMissReason?: InferenceCacheMissReason;
+    kvCacheWritten?: boolean;
+    kvCacheWriteRef?: KvCacheRef;
+    reusedTokens?: number;
+    bypassed?: boolean;
+    issues?: InferenceCacheIssue[];
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `agentId` | property | <code>agentId: string</code> | Public agent Id property. |
-| `context` | property | <code>context: Record&lt;string, unknown&gt;</code> | Public context property. |
-| `input` | property | <code>input: TInput</code> | Public input property. |
-| `instructions` | property | <code>instructions: string</code> | Public instructions property. |
-| `messages` | property | <code>messages: PromptMessage[]</code> | Public messages property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `resolvedPrefixContent` | property | <code>resolvedPrefixContent: string</code> | Public resolved Prefix Content property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
+| `bypassed` | property | <code>bypassed?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `issues` | property | <code>issues?: InferenceCacheIssue[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheHit` | property | <code>kvCacheHit?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheMissReason` | property | <code>kvCacheMissReason?: InferenceCacheMissReason</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheRef` | property | <code>kvCacheRef?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheWriteRef` | property | <code>kvCacheWriteRef?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheWritten` | property | <code>kvCacheWritten?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixHit` | property | <code>prefixHit?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixRef` | property | <code>prefixRef?: PrefixCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reusedTokens` | property | <code>reusedTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `servingCache` | property | <code>servingCache?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PromptCompiler` contract members
+## `InferenceGenerationOptions`
+
+Inference Generation Options interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceGenerationOptions } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceGenerationOptions {
+    temperature?: number;
+    maxTokens?: number;
+    topP?: number;
+    topK?: number;
+    stop?: string[];
+    seed?: number;
+    stream?: boolean;
+    responseFormat?: 'text' | 'json_object' | {
+        type: string;
+        schema?: unknown;
+    };
+    extra?: Record<string, unknown>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `compile` | method | <code>compile&lt;TInput = unknown&gt;(input: PromptCompileInput&lt;TInput&gt;): Promise&lt;CompiledPrompt&gt;</code> | Compiles compile at this module boundary. |
+| `extra` | property | <code>extra?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxTokens` | property | <code>maxTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `responseFormat` | property | <code>responseFormat?: "text" &#124; "json_object" &#124; { type: string; schema?: unknown; }</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `seed` | property | <code>seed?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stop` | property | <code>stop?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | property | <code>stream?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `temperature` | property | <code>temperature?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `topK` | property | <code>topK?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `topP` | property | <code>topP?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PromptMessage` contract members
+## `InferenceManagerOptions`
+
+Inference Manager Options interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceManagerOptions } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceManagerOptions {
+    prefixCache?: PrefixCacheProvider;
+    kvCache?: KvCacheProvider;
+    cacheFailureMode?: 'bypass' | 'strict';
+    cacheOperationTimeoutMs?: number;
+    providerRevision?: string;
+    policyRevision?: string;
+    specRevision?: string;
+    onRecoveryFailure?: (failure: RecoveryFailure) => void | Promise<void>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `content` | property | <code>content: string</code> | Public content property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `role` | property | <code>role: PromptRole</code> | Public role property. |
+| `cacheFailureMode` | property | <code>cacheFailureMode?: "strict" &#124; "bypass"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cacheOperationTimeoutMs` | property | <code>cacheOperationTimeoutMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCache` | property | <code>kvCache?: KvCacheProvider</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `onRecoveryFailure` | method | <code>onRecoveryFailure?(failure: RecoveryFailure): void &#124; Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `policyRevision` | property | <code>policyRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixCache` | property | <code>prefixCache?: PrefixCacheProvider</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerRevision` | property | <code>providerRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `specRevision` | property | <code>specRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `InferenceProvider`
+
+Inference Provider interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceProvider } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceProvider {
+    id: string;
+    infer(request: InferenceRequest): Promise<InferenceResponse>;
+    stream?(request: InferenceRequest): AsyncIterable<InferenceResponse>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceRequest): Promise&lt;InferenceResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `stream` | method | <code>stream?(request: InferenceRequest): AsyncIterable&lt;InferenceResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `InferenceRequest`
+
+Inference Request interface with 18 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceRequest } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceRequest<TInput = unknown> {
+    runId: string;
+    stepId: string;
+    sessionId?: string;
+    agentId?: string;
+    modelAlias: string;
+    providerId?: string;
+    backendId?: string;
+    input: TInput;
+    options?: InferenceGenerationOptions;
+    tools?: InferenceToolDescriptor[];
+    cachePolicy?: InferenceCachePolicy;
+    cacheScope?: InferenceCacheScope;
+    prefix?: PrefixCacheRef;
+    resolvedPrefixContent?: string;
+    kvCache?: KvCacheRef;
+    resolvedKvCacheValue?: unknown;
+    trace?: boolean;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agentId` | property | <code>agentId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `backendId` | property | <code>backendId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cachePolicy` | property | <code>cachePolicy?: InferenceCachePolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cacheScope` | property | <code>cacheScope?: InferenceCacheScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input: TInput</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCache` | property | <code>kvCache?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `options` | property | <code>options?: InferenceGenerationOptions</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefix` | property | <code>prefix?: PrefixCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerId` | property | <code>providerId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolvedKvCacheValue` | property | <code>resolvedKvCacheValue?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolvedPrefixContent` | property | <code>resolvedPrefixContent?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tools` | property | <code>tools?: InferenceToolDescriptor[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `trace` | property | <code>trace?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `InferenceResponse`
+
+Inference Response interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceResponse } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceResponse<TOutput = unknown> {
+    id: string;
+    output: TOutput;
+    usage?: InferenceUsage;
+    cache?: InferenceCacheUsage;
+    nextKvCacheValue?: unknown;
+    metadata?: Record<string, unknown>;
+    raw?: unknown;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cache` | property | <code>cache?: InferenceCacheUsage</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `nextKvCacheValue` | property | <code>nextKvCacheValue?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `output` | property | <code>output: TOutput</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `raw` | property | <code>raw?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `usage` | property | <code>usage?: InferenceUsage</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `InferenceToolDescriptor`
+
+Inference Tool Descriptor interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceToolDescriptor } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceToolDescriptor {
+    id: string;
+    name: string;
+    description?: string;
+    inputSchema: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `inputSchema` | property | <code>inputSchema: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `InferenceUsage`
+
+Inference Usage interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceUsage } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface InferenceUsage {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `inputTokens` | property | <code>inputTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `outputTokens` | property | <code>outputTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `totalTokens` | property | <code>totalTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `KvCacheProvider`
+
+Kv Cache Provider interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { KvCacheProvider } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface KvCacheProvider {
+    get(ref: KvCacheRef): Promise<unknown | null>;
+    put(ref: KvCacheRef, value: unknown): Promise<void>;
+    invalidate(ref: KvCacheRef, reason: string): Promise<void>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `get` | method | <code>get(ref: KvCacheRef): Promise&lt;unknown &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `invalidate` | method | <code>invalidate(ref: KvCacheRef, reason: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `put` | method | <code>put(ref: KvCacheRef, value: unknown): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `KvCacheRef`
+
+Kv Cache Ref interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { KvCacheRef } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface KvCacheRef {
+    id: string;
+    provider: string;
+    modelAlias: string;
+    scope: KvCacheScope;
+    cacheScope?: InferenceCacheScope;
+    expiresAt?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cacheScope` | property | <code>cacheScope?: InferenceCacheScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expiresAt` | property | <code>expiresAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provider` | property | <code>provider: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: KvCacheScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `KvCacheWritePolicy`
+
+Kv Cache Write Policy interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { KvCacheWritePolicy } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface KvCacheWritePolicy {
+    ref: KvCacheRef;
+    value?: unknown;
+    mode?: KvCacheWriteMode;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `mode` | property | <code>mode?: KvCacheWriteMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ref` | property | <code>ref: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `value` | property | <code>value?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PlasmodCacheMetadata`
+
+Plasmod Cache Metadata interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PlasmodCacheMetadata } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PlasmodCacheMetadata {
+    segmentId: string;
+    contentHash: string;
+    backendId: string;
+    modelAlias: string;
+    scope: PrefixSegmentScope;
+    tokenCount?: number;
+    reused: boolean;
+    createdAt: string;
+    updatedAt: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `backendId` | property | <code>backendId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contentHash` | property | <code>contentHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reused` | property | <code>reused: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: PrefixSegmentScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `segmentId` | property | <code>segmentId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenCount` | property | <code>tokenCount?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PlasmodHotLayer`
+
+Plasmod Hot Layer interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PlasmodHotLayer } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PlasmodHotLayer {
+    prepare(input: PlasmodHotLayerPrepareInput): Promise<PlasmodHotLayerPrepareResult>;
+    invalidateSegment(segmentId: string, reason: string): Promise<void>;
+    getSessionState(stateId: string): PlasmodSessionState | null;
+    getCacheMetadata(segmentId: string): PlasmodCacheMetadata | null;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `getCacheMetadata` | method | <code>getCacheMetadata(segmentId: string): PlasmodCacheMetadata &#124; null</code> | Public method; parameters and return type are shown in the signature. |
+| `getSessionState` | method | <code>getSessionState(stateId: string): PlasmodSessionState &#124; null</code> | Public method; parameters and return type are shown in the signature. |
+| `invalidateSegment` | method | <code>invalidateSegment(segmentId: string, reason: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `prepare` | method | <code>prepare(input: PlasmodHotLayerPrepareInput): Promise&lt;PlasmodHotLayerPrepareResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `PlasmodHotLayerPrepareInput`
+
+Plasmod Hot Layer Prepare Input interface with 12 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PlasmodHotLayerPrepareInput } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PlasmodHotLayerPrepareInput {
+    runId: string;
+    stepId: string;
+    sessionId?: string;
+    agentId?: string;
+    modelAlias: string;
+    backendId: string;
+    cacheScope?: InferenceCacheScope;
+    segmentation: PrefixSegmentationResult;
+    kvCache?: KvCacheRef;
+    resolvedKvCacheValue?: unknown;
+    reusePolicy?: PlasmodReusePolicy;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agentId` | property | <code>agentId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `backendId` | property | <code>backendId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cacheScope` | property | <code>cacheScope?: InferenceCacheScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCache` | property | <code>kvCache?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolvedKvCacheValue` | property | <code>resolvedKvCacheValue?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reusePolicy` | property | <code>reusePolicy?: PlasmodReusePolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `segmentation` | property | <code>segmentation: PrefixSegmentationResult</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PlasmodHotLayerPrepareResult`
+
+Plasmod Hot Layer Prepare Result interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PlasmodHotLayerPrepareResult } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PlasmodHotLayerPrepareResult {
+    prefixRefs: PrefixCacheRef[];
+    kvCacheRef?: KvCacheRef;
+    physicalKvCache?: unknown;
+    reusedSegmentIds: string[];
+    invalidatedSegmentIds: string[];
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `invalidatedSegmentIds` | property | <code>invalidatedSegmentIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheRef` | property | <code>kvCacheRef?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `physicalKvCache` | property | <code>physicalKvCache?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixRefs` | property | <code>prefixRefs: PrefixCacheRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reusedSegmentIds` | property | <code>reusedSegmentIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PlasmodReusePolicy`
+
+Plasmod Reuse Policy interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PlasmodReusePolicy } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PlasmodReusePolicy {
+    allowCrossSession?: boolean;
+    allowCrossAgent?: boolean;
+    minTokenCount?: number;
+    requireExactHash?: boolean;
+    maxPrefixRefs?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowCrossAgent` | property | <code>allowCrossAgent?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `allowCrossSession` | property | <code>allowCrossSession?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxPrefixRefs` | property | <code>maxPrefixRefs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `minTokenCount` | property | <code>minTokenCount?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requireExactHash` | property | <code>requireExactHash?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PlasmodSessionState`
+
+Plasmod Session State interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PlasmodSessionState } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PlasmodSessionState {
+    id: string;
+    sessionId?: string;
+    runId: string;
+    agentId?: string;
+    modelAlias: string;
+    backendId: string;
+    prefixRefs: PrefixCacheRef[];
+    kvCacheRef?: KvCacheRef;
+    updatedAt: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agentId` | property | <code>agentId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `backendId` | property | <code>backendId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kvCacheRef` | property | <code>kvCacheRef?: KvCacheRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `prefixRefs` | property | <code>prefixRefs: PrefixCacheRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PrefixCacheProvider`
+
+Prefix Cache Provider interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PrefixCacheProvider } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PrefixCacheProvider {
+    get(ref: PrefixCacheRef): Promise<string | null>;
+    put(ref: PrefixCacheRef, content: string): Promise<void>;
+    invalidate(ref: PrefixCacheRef, reason: string): Promise<void>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `get` | method | <code>get(ref: PrefixCacheRef): Promise&lt;string &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `invalidate` | method | <code>invalidate(ref: PrefixCacheRef, reason: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `put` | method | <code>put(ref: PrefixCacheRef, content: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `PrefixCacheRef`
+
+Prefix Cache Ref interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PrefixCacheRef } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PrefixCacheRef {
+    id: string;
+    version: string;
+    contentHash: string;
+    tokenCount?: number;
+    cacheScope?: InferenceCacheScope;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cacheScope` | property | <code>cacheScope?: InferenceCacheScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contentHash` | property | <code>contentHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenCount` | property | <code>tokenCount?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PrefixSegment`
+
+Prefix Segment interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PrefixSegment } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PrefixSegment {
+    id: string;
+    kind: PrefixSegmentKind;
+    scope: PrefixSegmentScope;
+    content: string;
+    contentHash: string;
+    tokenCount?: number;
+    cacheable: boolean;
+    dependencies?: string[];
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cacheable` | property | <code>cacheable: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `content` | property | <code>content: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contentHash` | property | <code>contentHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `dependencies` | property | <code>dependencies?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>kind: PrefixSegmentKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: PrefixSegmentScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenCount` | property | <code>tokenCount?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PrefixSegmentationResult`
+
+Prefix Segmentation Result interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PrefixSegmentationResult } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PrefixSegmentationResult {
+    compiled: CompiledPrompt;
+    segments: PrefixSegment[];
+    stablePrefix: string;
+    dynamicPrompt: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `compiled` | property | <code>compiled: CompiledPrompt</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `dynamicPrompt` | property | <code>dynamicPrompt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `segments` | property | <code>segments: PrefixSegment[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stablePrefix` | property | <code>stablePrefix: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PrefixSegmenter`
+
+Prefix Segmenter interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PrefixSegmenter } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PrefixSegmenter {
+    segment(prompt: CompiledPrompt): Promise<PrefixSegmentationResult>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `segment` | method | <code>segment(prompt: CompiledPrompt): Promise&lt;PrefixSegmentationResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `PromptCompileInput`
+
+Prompt Compile Input interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PromptCompileInput } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PromptCompileInput<TInput = unknown> {
+    runId: string;
+    stepId: string;
+    sessionId?: string;
+    agentId?: string;
+    modelAlias: string;
+    instructions?: string;
+    messages?: PromptMessage[];
+    input: TInput;
+    context?: Record<string, unknown>;
+    resolvedPrefixContent?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agentId` | property | <code>agentId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `context` | property | <code>context?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input: TInput</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `instructions` | property | <code>instructions?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messages` | property | <code>messages?: PromptMessage[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolvedPrefixContent` | property | <code>resolvedPrefixContent?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PromptCompiler`
+
+Prompt Compiler interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PromptCompiler } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PromptCompiler {
+    compile<TInput = unknown>(input: PromptCompileInput<TInput>): Promise<CompiledPrompt>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `compile` | method | <code>compile&lt;TInput = unknown&gt;(input: PromptCompileInput&lt;TInput&gt;): Promise&lt;CompiledPrompt&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `PromptMessage`
+
+Prompt Message interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PromptMessage } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export interface PromptMessage {
+    role: PromptRole;
+    content: string;
+    name?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `content` | property | <code>content: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `role` | property | <code>role: PromptRole</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `InferenceBackendKind`
+
+Public type alias for Inference Backend Kind; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { InferenceBackendKind } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type InferenceBackendKind = 'ollama' | 'sglang' | 'vllm' | 'llama.cpp' | 'openai-api';
+```
+
+## `InferenceCacheMissReason`
+
+Public type alias for Inference Cache Miss Reason; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { InferenceCacheMissReason } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type InferenceCacheMissReason = 'missing' | 'expired' | 'not_configured' | 'error';
+```
+
+## `KvCacheScope`
+
+Public type alias for Kv Cache Scope; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { KvCacheScope } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type KvCacheScope = 'run' | 'session' | 'workspace';
+```
+
+## `KvCacheWriteMode`
+
+Public type alias for Kv Cache Write Mode; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { KvCacheWriteMode } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type KvCacheWriteMode = 'write_through' | 'write_if_missing' | 'refresh';
+```
+
+## `PrefixSegmentKind`
+
+Public type alias for Prefix Segment Kind; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { PrefixSegmentKind } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type PrefixSegmentKind = 'system' | 'developer' | 'context' | 'memory' | 'tool' | 'user' | 'assistant';
+```
+
+## `PrefixSegmentScope`
+
+Public type alias for Prefix Segment Scope; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { PrefixSegmentScope } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type PrefixSegmentScope = 'global' | 'agent' | 'session' | 'run' | 'dynamic';
+```
+
+## `PromptRole`
+
+Public type alias for Prompt Role; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { PromptRole } from '@codesoul-co/hypha-inference';`
+- Source module: [`types`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/types.ts)
+
+### Declaration
+
+```text
+export type PromptRole = 'system' | 'developer' | 'user' | 'assistant' | 'tool' | 'context' | 'memory';
+```

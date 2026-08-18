@@ -2,9 +2,10 @@
 
 ReAct Agent specification and kernel composition contracts.
 
-- Package guide: [`@codesoul-co/hypha-kernel`](/packages/kernel)
 - Install: `npm install @codesoul-co/hypha-kernel@1.0.1`
+- Entrypoint import: `import { ... } from '@codesoul-co/hypha-kernel';`
 - Public exports: **85**
+- Source modules: **1**
 
 ## Export overview
 
@@ -18,17 +19,10 @@ ReAct Agent specification and kernel composition contracts.
 
 ## Source modules
 
-| Module | Exports | Source |
-| --- | ---: | --- |
-| [`index`](/api/kernel/entrypoint) | 85 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts) |
+| Module | Use when | Exports | Source |
+| --- | --- | ---: | --- |
+| [`index`](/api/kernel/entrypoint) | Aggregates the public entrypoint exports for `@codesoul-co/hypha-kernel`; applications import these symbols from the package entrypoint instead of internal file paths. | 85 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts) |
 
-## Reading order
+## Import boundary
 
-Choose a source module above, then inspect its exported symbols, signatures, descriptions and public class/interface members. Every module page links back to the implementation source.
-
-## Usage conventions
-
-- Import from the package entrypoint instead of relying on unexported internal files.
-- Parse configuration, network requests and persisted data with runtime schemas.
-- Classes provide runtime behavior while specs/interfaces define cross-module contracts; do not leak provider SDK types into Core.
-- Use the [runnable examples](/guide/examples) to verify real call order.
+This page documents only the public API exported by the `@codesoul-co/hypha-kernel` package entrypoint. Implementations under `packages/kernel/src` that are not exported from that entrypoint are not part of the npm package contract.

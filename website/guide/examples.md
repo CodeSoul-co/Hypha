@@ -53,7 +53,7 @@ Expected shape:
 }
 ```
 
-Use the [feature map](/guide/capability-map) to understand each boundary and the [complete API reference](/api/) to inspect every imported class/function/member.
+The [complete API reference](/api/) documents every imported class, function, type, constant, parameter, return value, and public member used by these examples.
 
 ## What the 15-package tour verifies
 

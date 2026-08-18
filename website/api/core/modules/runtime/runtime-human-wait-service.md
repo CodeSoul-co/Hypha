@@ -1,94 +1,256 @@
 # `@codesoul-co/hypha-core` / `modules/runtime/runtime-human-wait-service`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/modules/runtime/runtime-human-wait-service.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
 - Exports: **6**
+
+## Using this module
+
+Use the Runtime human wait service module for executing runtime behavior at this boundary. It exports 1 class, 5 interfaces.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  RuntimeHumanWaitService,
+} from '@codesoul-co/hypha-core';
+
+import type {
+  RuntimeHumanWaitCreateCommand,
+  RuntimeHumanWaitResolveCommand,
+  RuntimeHumanWaitResult,
+  RuntimeHumanWaitServiceOptions,
+  RuntimeHumanWaitSupersedeCommand,
+} from '@codesoul-co/hypha-core';
+```
+
+### Usage patterns
+
+- Use the 5 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 1 class as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `RuntimeHumanWaitService` | class | <code>new RuntimeHumanWaitService(options: RuntimeHumanWaitServiceOptions): RuntimeHumanWaitService</code> | Runtime implementation for Runtime Human Wait Service; see its public constructor and members below. |
-| `RuntimeHumanWaitCreateCommand` | interface | <code>interface RuntimeHumanWaitCreateCommand</code> | Field contract for Runtime Human Wait Create Command; see all contract members below. |
-| `RuntimeHumanWaitResolveCommand` | interface | <code>interface RuntimeHumanWaitResolveCommand</code> | Field contract for Runtime Human Wait Resolve Command; see all contract members below. |
-| `RuntimeHumanWaitResult` | interface | <code>interface RuntimeHumanWaitResult</code> | Field contract for Runtime Human Wait Result; see all contract members below. |
-| `RuntimeHumanWaitServiceOptions` | interface | <code>interface RuntimeHumanWaitServiceOptions</code> | Field contract for Runtime Human Wait Service Options; see all contract members below. |
-| `RuntimeHumanWaitSupersedeCommand` | interface | <code>interface RuntimeHumanWaitSupersedeCommand</code> | Field contract for Runtime Human Wait Supersede Command; see all contract members below. |
+| `RuntimeHumanWaitService` | class | <code>new RuntimeHumanWaitService(options: RuntimeHumanWaitServiceOptions): RuntimeHumanWaitService</code> | Runtime Human Wait Service class with 4 public constructor or member entries; its exact declarations are listed below. |
+| `RuntimeHumanWaitCreateCommand` | interface | <code>interface RuntimeHumanWaitCreateCommand</code> | Runtime Human Wait Create Command interface with 10 public fields or methods. |
+| `RuntimeHumanWaitResolveCommand` | interface | <code>interface RuntimeHumanWaitResolveCommand</code> | Runtime Human Wait Resolve Command interface with 11 public fields or methods. |
+| `RuntimeHumanWaitResult` | interface | <code>interface RuntimeHumanWaitResult</code> | Runtime Human Wait Result interface with 5 public fields or methods. |
+| `RuntimeHumanWaitServiceOptions` | interface | <code>interface RuntimeHumanWaitServiceOptions</code> | Runtime Human Wait Service Options interface with 6 public fields or methods. |
+| `RuntimeHumanWaitSupersedeCommand` | interface | <code>interface RuntimeHumanWaitSupersedeCommand</code> | Runtime Human Wait Supersede Command interface with 11 public fields or methods. |
 
-## `RuntimeHumanWaitService` public members
+## `RuntimeHumanWaitService`
+
+Runtime Human Wait Service class with 4 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { RuntimeHumanWaitService } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-human-wait-service`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
+
+### Declaration
+
+```text
+export declare class RuntimeHumanWaitService {
+    constructor(options: RuntimeHumanWaitServiceOptions);
+    create(input: RuntimeHumanWaitCreateCommand): Promise<RuntimeHumanWaitResult>;
+    resolve(input: RuntimeHumanWaitResolveCommand): Promise<RuntimeHumanWaitResult>;
+    supersede(input: RuntimeHumanWaitSupersedeCommand): Promise<RuntimeHumanWaitResult>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(options: RuntimeHumanWaitServiceOptions): RuntimeHumanWaitService</code> | Creates an instance of this class. |
-| `create` | method | <code>create(input: RuntimeHumanWaitCreateCommand): Promise&lt;RuntimeHumanWaitResult&gt;</code> | Creates create at this module boundary. |
-| `resolve` | method | <code>resolve(input: RuntimeHumanWaitResolveCommand): Promise&lt;RuntimeHumanWaitResult&gt;</code> | Resolves resolve at this module boundary. |
-| `supersede` | method | <code>supersede(input: RuntimeHumanWaitSupersedeCommand): Promise&lt;RuntimeHumanWaitResult&gt;</code> | Public runtime operation for supersede. |
+| `create` | method | <code>create(input: RuntimeHumanWaitCreateCommand): Promise&lt;RuntimeHumanWaitResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `resolve` | method | <code>resolve(input: RuntimeHumanWaitResolveCommand): Promise&lt;RuntimeHumanWaitResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `supersede` | method | <code>supersede(input: RuntimeHumanWaitSupersedeCommand): Promise&lt;RuntimeHumanWaitResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `RuntimeHumanWaitCreateCommand` contract members
+## `RuntimeHumanWaitCreateCommand`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `commandId` | property | <code>commandId: string</code> | Public command Id property. |
-| `humanTasks` | property | <code>humanTasks: RuntimeHumanTaskRequest[]</code> | Public human Tasks property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public lease Ttl Ms property. |
-| `ownerId` | property | <code>ownerId: string</code> | Public owner Id property. |
-| `pendingActionRef` | property | <code>pendingActionRef: string</code> | Public pending Action Ref property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `requestedAt` | property | <code>requestedAt: string</code> | Public requested At property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
-| `waitId` | property | <code>waitId: string</code> | Public wait Id property. |
+Runtime Human Wait Create Command interface with 10 public fields or methods.
 
-## `RuntimeHumanWaitResolveCommand` contract members
+- Kind: interface
+- Import: `import type { RuntimeHumanWaitCreateCommand } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-human-wait-service`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `commandId` | property | <code>commandId: string</code> | Public command Id property. |
-| `decision` | property | <code>decision: "rejected" &#124; "cancelled" &#124; "expired" &#124; "approved"</code> | Public decision property. |
-| `humanTaskDecision` | property | <code>humanTaskDecision: RuntimeHumanTaskDecisionCommand</code> | Public human Task Decision property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public lease Ttl Ms property. |
-| `ownerId` | property | <code>ownerId: string</code> | Public owner Id property. |
-| `pendingActionRef` | property | <code>pendingActionRef: string</code> | Public pending Action Ref property. |
-| `principalId` | property | <code>principalId: string</code> | Public principal Id property. |
-| `resolvedAt` | property | <code>resolvedAt: string</code> | Public resolved At property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
-| `waitId` | property | <code>waitId: string</code> | Public wait Id property. |
+### Declaration
 
-## `RuntimeHumanWaitResult` contract members
+```text
+export interface RuntimeHumanWaitCreateCommand {
+    commandId: string;
+    scope: RuntimeScope;
+    ownerId: string;
+    leaseTtlMs: number;
+    waitId: string;
+    pendingActionRef: string;
+    reason: string;
+    requestedAt: string;
+    humanTasks?: RuntimeHumanTaskRequest[];
+    idempotencyKey?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `commandId` | property | <code>commandId: string</code> | Public command Id property. |
-| `disposition` | property | <code>disposition: "applied" &#124; "reused" &#124; "lease_unavailable"</code> | Public disposition property. |
-| `eventIds` | property | <code>eventIds: string[]</code> | Public event Ids property. |
-| `projection` | property | <code>projection: RuntimeOrchestrationProjection</code> | Public projection property. |
-| `runRevision` | property | <code>runRevision: number</code> | Public run Revision property. |
+| `commandId` | property | <code>commandId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `humanTasks` | property | <code>humanTasks?: RuntimeHumanTaskRequest[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ownerId` | property | <code>ownerId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pendingActionRef` | property | <code>pendingActionRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requestedAt` | property | <code>requestedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `waitId` | property | <code>waitId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `RuntimeHumanWaitServiceOptions` contract members
+## `RuntimeHumanWaitResolveCommand`
+
+Runtime Human Wait Resolve Command interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeHumanWaitResolveCommand } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-human-wait-service`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
+
+### Declaration
+
+```text
+export interface RuntimeHumanWaitResolveCommand {
+    commandId: string;
+    scope: RuntimeScope;
+    ownerId: string;
+    leaseTtlMs: number;
+    waitId?: string;
+    pendingActionRef: string;
+    principalId: string;
+    decision: 'approved' | 'rejected' | 'expired' | 'cancelled';
+    resolvedAt: string;
+    humanTaskDecision?: RuntimeHumanTaskDecisionCommand;
+    idempotencyKey?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `events` | property | <code>events: EventRuntime</code> | Public events property. |
-| `nextId` | method | <code>nextId(namespace: string): string</code> | Public runtime operation for next Id. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `projections` | property | <code>projections: ProjectionEngine</code> | Public projections property. |
-| `projectionStore` | property | <code>projectionStore: ProjectionStore&lt;RuntimeOrchestrationProjection&gt;</code> | Public projection Store property. |
-| `runLeases` | property | <code>runLeases: RunLeaseStore</code> | Public run Leases property. |
+| `commandId` | property | <code>commandId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `decision` | property | <code>decision: "rejected" &#124; "cancelled" &#124; "expired" &#124; "approved"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `humanTaskDecision` | property | <code>humanTaskDecision?: RuntimeHumanTaskDecisionCommand</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ownerId` | property | <code>ownerId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pendingActionRef` | property | <code>pendingActionRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principalId` | property | <code>principalId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolvedAt` | property | <code>resolvedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `waitId` | property | <code>waitId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `RuntimeHumanWaitSupersedeCommand` contract members
+## `RuntimeHumanWaitResult`
+
+Runtime Human Wait Result interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeHumanWaitResult } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-human-wait-service`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
+
+### Declaration
+
+```text
+export interface RuntimeHumanWaitResult {
+    commandId: string;
+    disposition: 'applied' | 'reused' | 'lease_unavailable';
+    eventIds: string[];
+    runRevision: number;
+    projection: RuntimeOrchestrationProjection;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `commandId` | property | <code>commandId: string</code> | Public command Id property. |
-| `humanTaskDecision` | property | <code>humanTaskDecision: RuntimeHumanTaskDecisionCommand</code> | Public human Task Decision property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public lease Ttl Ms property. |
-| `ownerId` | property | <code>ownerId: string</code> | Public owner Id property. |
-| `pendingActionRef` | property | <code>pendingActionRef: string</code> | Public pending Action Ref property. |
-| `principalId` | property | <code>principalId: string</code> | Public principal Id property. |
-| `replacementTask` | property | <code>replacementTask: RuntimeHumanTaskRequest</code> | Public replacement Task property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
-| `supersededAt` | property | <code>supersededAt: string</code> | Public superseded At property. |
-| `waitId` | property | <code>waitId: string</code> | Public wait Id property. |
+| `commandId` | property | <code>commandId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `disposition` | property | <code>disposition: "applied" &#124; "reused" &#124; "lease_unavailable"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `eventIds` | property | <code>eventIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `projection` | property | <code>projection: RuntimeOrchestrationProjection</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runRevision` | property | <code>runRevision: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeHumanWaitServiceOptions`
+
+Runtime Human Wait Service Options interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeHumanWaitServiceOptions } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-human-wait-service`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
+
+### Declaration
+
+```text
+export interface RuntimeHumanWaitServiceOptions {
+    events: EventRuntime;
+    projections: ProjectionEngine;
+    projectionStore: ProjectionStore<RuntimeOrchestrationProjection>;
+    runLeases: RunLeaseStore;
+    now?: () => string;
+    nextId?: (namespace: string) => string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `events` | property | <code>events: EventRuntime</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `nextId` | method | <code>nextId?(namespace: string): string</code> | Public method; parameters and return type are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `projections` | property | <code>projections: ProjectionEngine</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `projectionStore` | property | <code>projectionStore: ProjectionStore&lt;RuntimeOrchestrationProjection&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runLeases` | property | <code>runLeases: RunLeaseStore</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeHumanWaitSupersedeCommand`
+
+Runtime Human Wait Supersede Command interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeHumanWaitSupersedeCommand } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-human-wait-service`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-human-wait-service.ts)
+
+### Declaration
+
+```text
+export interface RuntimeHumanWaitSupersedeCommand {
+    commandId: string;
+    scope: RuntimeScope;
+    ownerId: string;
+    leaseTtlMs: number;
+    waitId?: string;
+    pendingActionRef: string;
+    principalId: string;
+    supersededAt: string;
+    humanTaskDecision: RuntimeHumanTaskDecisionCommand;
+    replacementTask: RuntimeHumanTaskRequest;
+    idempotencyKey?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `commandId` | property | <code>commandId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `humanTaskDecision` | property | <code>humanTaskDecision: RuntimeHumanTaskDecisionCommand</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ownerId` | property | <code>ownerId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pendingActionRef` | property | <code>pendingActionRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principalId` | property | <code>principalId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `replacementTask` | property | <code>replacementTask: RuntimeHumanTaskRequest</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `supersededAt` | property | <code>supersededAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `waitId` | property | <code>waitId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |

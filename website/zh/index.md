@@ -58,4 +58,4 @@ features:
 
 ## 框架边界，而不是应用模板
 
-Hypha 提供契约与执行边界；应用提供 Domain Pack、Prompt、Workflow、能力选择、Policy 与部署覆盖配置。建议先阅读[逐功能地图](/zh/guide/capability-map)，按需选择[模块](/zh/packages/)，再从[完整 API](/zh/api/)查询具体源码模块与 Symbol。
+Hypha 提供契约与执行边界；应用提供 Domain Pack、Prompt、Workflow、能力选择、Policy 与部署覆盖配置。[完整 API 参考](/zh/api/)记录全部公共导出、声明、参数、返回值与成员，[可运行示例](/zh/guide/examples)展示这些 API 在应用代码中的用法。

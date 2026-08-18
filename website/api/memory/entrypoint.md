@@ -1,341 +1,1141 @@
 # `@codesoul-co/hypha-memory` / `index`
 
 - Package index: [`@codesoul-co/hypha-memory`](/api/memory)
-- Package guide: [learning and composition guide](/packages/memory)
 - Source: [`packages/memory/src/index.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 - Exports: **40**
+
+## Using this module
+
+Aggregates the public entrypoint exports for `@codesoul-co/hypha-memory`; applications import these symbols from the package entrypoint instead of internal file paths.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  MemoryManager,
+  memoryProviderProfileSchema,
+  memoryRetrievalPolicySchema,
+  memorySpecDefinition,
+  memorySpecDefinitions,
+  memorySpecExample,
+  memorySpecJsonSchema,
+  memorySpecJsonSchemas,
+} from '@codesoul-co/hypha-memory';
+
+import type {
+  ArtifactMeta,
+  ArtifactRef,
+  ArtifactStoreProvider,
+  EmbeddingProvider,
+  MemoryAuditOptions,
+  MemoryAuditReport,
+  MemoryManagerOptions,
+  MemoryManagerRecoveryOptions,
+} from '@codesoul-co/hypha-memory';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 29 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 1 class as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+- The module exposes 1 function as direct operation entrypoints. Every overload, required/optional parameter, and return type is documented below.
+- The 9 constant/enum exports provide stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.
+
+### Runtime validation example
+
+```ts
+import { memoryProviderProfileSchema } from '@codesoul-co/hypha-memory';
+
+declare function loadExternalInput(): unknown;
+const input: unknown = loadExternalInput();
+const parsed = memoryProviderProfileSchema.parse(input);
+```
+
+Parse untrusted configuration, network, or persisted input with the runtime schema before passing it to functions or classes that expect a validated contract.
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `MemoryManager` | class | <code>new MemoryManager(provider: MemoryProvider &#124; MemoryManagementProvider, options?: MemoryManagerOptions): MemoryManager</code> | Runtime implementation for Memory Manager; see its public constructor and members below. |
-| `memoryProviderProfileSchema` | constant | <code>const memoryProviderProfileSchema: z.ZodObject&lt;{ id: z.ZodString; type: z.ZodEnum&lt;["structured", "vector", "artifact", "hybrid"]&gt;; providerRef: z.ZodString; configSchema: z.ZodOptional&lt;z.ZodType&lt;JsonSchema, z.ZodTypeDef, JsonSchema&gt;&gt;; }, "strip", z.ZodTypeAny, { id: string; type: "artifact" &#124; "structured" &#124; "vector" &#124; "hybrid"; providerRef: string; configSchema?: JsonSchema &#124; undefined; }, { id: string; type: "art...</code> | Runtime schema for memory Provider Profile. |
-| `memoryRetrievalPolicySchema` | constant | <code>const memoryRetrievalPolicySchema: z.ZodObject&lt;{ defaultTopK: z.ZodOptional&lt;z.ZodNumber&gt;; vectorWeight: z.ZodOptional&lt;z.ZodNumber&gt;; textWeight: z.ZodOptional&lt;z.ZodNumber&gt;; requireScope: z.ZodOptional&lt;z.ZodBoolean&gt;; allowedTypes: z.ZodOptional&lt;z.ZodArray&lt;z.ZodEnum&lt;["working", "episodic", "semantic", "procedural", "artifact", "governance"]&gt;, "many"&gt;&gt;; }, "strip", z.ZodTypeAny, { defaultTopK?: number &#124; undefined; vec...</code> | Runtime schema for memory Retrieval Policy. |
-| `memorySpecDefinition` | constant | <code>const memorySpecDefinition: SpecSchemaDefinition&lt;MemorySpec&gt;</code> | Runtime validation entrypoint for the memory spec, combining its parser, example and JSON Schema. |
-| `memorySpecDefinitions` | constant | <code>const memorySpecDefinitions: readonly [SpecSchemaDefinition&lt;MemorySpec&gt;]</code> | memory Spec Definitions constant exported by the `index` module. |
-| `memorySpecExample` | constant | <code>const memorySpecExample: MemorySpec</code> | Valid example value for memory Spec. |
-| `memorySpecJsonSchema` | constant | <code>const memorySpecJsonSchema: JsonSchema</code> | JSON Schema for memory Spec. |
-| `memorySpecJsonSchemas` | constant | <code>const memorySpecJsonSchemas: Record&lt;string, JsonSchema&gt;</code> | memory Spec Json Schemas constant exported by the `index` module. |
-| `memorySpecSchema` | constant | <code>const memorySpecSchema: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodString; } &amp; { name: z.ZodOptional&lt;z.ZodString&gt;; description: z.ZodOptional&lt;z.ZodString&gt;; owner: z.ZodOptional&lt;z.ZodString&gt;; tags: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; createdAt: z.ZodOptional&lt;z.ZodString&gt;; updatedAt: z.ZodOptional&lt;z.ZodString&gt;; } &amp; { providers: z.ZodArray&lt;z.ZodObject&lt;{ id: z.ZodString; type: z.ZodEnum&lt;["structured", "v...</code> | Runtime schema for memory Spec. |
-| `memoryTypeSchema` | constant | <code>const memoryTypeSchema: z.ZodEnum&lt;["working", "episodic", "semantic", "procedural", "artifact", "governance"]&gt;</code> | Runtime schema for memory Type. |
-| `validateMemorySpec` | function | <code>validateMemorySpec(input: unknown): MemorySpec</code> | Validates Memory Spec at this module boundary. |
-| `ArtifactMeta` | interface | <code>interface ArtifactMeta</code> | Field contract for Artifact Meta; see all contract members below. |
-| `ArtifactRef` | interface | <code>interface ArtifactRef</code> | Field contract for Artifact Ref; see all contract members below. |
-| `ArtifactStoreProvider` | interface | <code>interface ArtifactStoreProvider</code> | Field contract for Artifact Store Provider; see all contract members below. |
-| `EmbeddingProvider` | interface | <code>interface EmbeddingProvider</code> | Field contract for Embedding Provider; see all contract members below. |
-| `MemoryAuditOptions` | interface | <code>interface MemoryAuditOptions</code> | Field contract for Memory Audit Options; see all contract members below. |
-| `MemoryAuditReport` | interface | <code>interface MemoryAuditReport</code> | Field contract for Memory Audit Report; see all contract members below. |
-| `MemoryManagerOptions` | interface | <code>interface MemoryManagerOptions</code> | Field contract for Memory Manager Options; see all contract members below. |
-| `MemoryManagerRecoveryOptions` | interface | <code>interface MemoryManagerRecoveryOptions</code> | Field contract for Memory Manager Recovery Options; see all contract members below. |
-| `MemoryProvider` | interface | <code>interface MemoryProvider</code> | Field contract for Memory Provider; see all contract members below. |
-| `MemoryProviderProfile` | interface | <code>interface MemoryProviderProfile</code> | Field contract for Memory Provider Profile; see all contract members below. |
-| `MemoryReadQuery` | interface | <code>interface MemoryReadQuery</code> | Field contract for Memory Read Query; see all contract members below. |
-| `MemoryRecord` | interface | <code>interface MemoryRecord</code> | Field contract for Memory Record; see all contract members below. |
-| `MemoryRetrievalPolicy` | interface | <code>interface MemoryRetrievalPolicy</code> | Field contract for Memory Retrieval Policy; see all contract members below. |
-| `MemoryScope` | interface | <code>interface MemoryScope</code> | Field contract for Memory Scope; see all contract members below. |
-| `MemorySearchQuery` | interface | <code>interface MemorySearchQuery</code> | Field contract for Memory Search Query; see all contract members below. |
-| `MemorySearchResult` | interface | <code>interface MemorySearchResult</code> | Field contract for Memory Search Result; see all contract members below. |
-| `MemorySpec` | interface | <code>interface MemorySpec extends VersionedSpec, SpecMetadata</code> | Field contract for Memory Spec; see all contract members below. |
-| `MemorySummary` | interface | <code>interface MemorySummary</code> | Field contract for Memory Summary; see all contract members below. |
-| `MemorySummaryOptions` | interface | <code>interface MemorySummaryOptions</code> | Field contract for Memory Summary Options; see all contract members below. |
-| `MemoryTraceContext` | interface | <code>interface MemoryTraceContext</code> | Field contract for Memory Trace Context; see all contract members below. |
-| `MemoryWritePolicy` | interface | <code>interface MemoryWritePolicy</code> | Field contract for Memory Write Policy; see all contract members below. |
-| `MemoryWriteResult` | interface | <code>interface MemoryWriteResult</code> | Field contract for Memory Write Result; see all contract members below. |
-| `StructuredQuery` | interface | <code>interface StructuredQuery</code> | Field contract for Structured Query; see all contract members below. |
-| `StructuredStoreProvider` | interface | <code>interface StructuredStoreProvider</code> | Field contract for Structured Store Provider; see all contract members below. |
-| `VectorIndexProvider` | interface | <code>interface VectorIndexProvider</code> | Field contract for Vector Index Provider; see all contract members below. |
-| `VectorQuery` | interface | <code>interface VectorQuery</code> | Field contract for Vector Query; see all contract members below. |
-| `VectorRecord` | interface | <code>interface VectorRecord</code> | Field contract for Vector Record; see all contract members below. |
-| `VectorSearchResult` | interface | <code>interface VectorSearchResult</code> | Field contract for Vector Search Result; see all contract members below. |
-| `MemoryType` | type | <code>type MemoryType = 'working' &#124; 'episodic' &#124; 'semantic' &#124; 'procedural' &#124; 'artifact' &#124; 'governance'</code> | Public type alias for Memory Type. |
+| `MemoryManager` | class | <code>new MemoryManager(provider: MemoryProvider &#124; MemoryManagementProvider, options?: MemoryManagerOptions): MemoryManager</code> | Memory Manager class with 16 public constructor or member entries; its exact declarations are listed below. |
+| `memoryProviderProfileSchema` | constant | <code>const memoryProviderProfileSchema: z.ZodObject&lt;{ id: z.ZodString; type: z.ZodEnum&lt;["structured", "vector", "artifact", "hybrid"]&gt;; providerRef: z.ZodString; configSchema: z.ZodOptional&lt;z.ZodType&lt;JsonSchema, z.ZodTypeDef, JsonSchema&gt;&gt;; }, "strip", z.ZodTypeAny, { id: string; type: "artifact" &#124; "structured" &#124; "vector" &#124; "hybrid"; providerRef: string; configSchema?: JsonSchema &#124; undefined; }, { id: string; type: "art...</code> | Runtime schema for Memory Provider Profile. |
+| `memoryRetrievalPolicySchema` | constant | <code>const memoryRetrievalPolicySchema: z.ZodObject&lt;{ defaultTopK: z.ZodOptional&lt;z.ZodNumber&gt;; vectorWeight: z.ZodOptional&lt;z.ZodNumber&gt;; textWeight: z.ZodOptional&lt;z.ZodNumber&gt;; requireScope: z.ZodOptional&lt;z.ZodBoolean&gt;; allowedTypes: z.ZodOptional&lt;z.ZodArray&lt;z.ZodEnum&lt;["working", "episodic", "semantic", "procedural", "artifact", "governance"]&gt;, "many"&gt;&gt;; }, "strip", z.ZodTypeAny, { defaultTopK?: number &#124; undefined; vec...</code> | Runtime schema for Memory Retrieval Policy. |
+| `memorySpecDefinition` | constant | <code>const memorySpecDefinition: SpecSchemaDefinition&lt;MemorySpec&gt;</code> | Runtime validation entrypoint for the Memory spec, combining its parser, example and JSON Schema. |
+| `memorySpecDefinitions` | constant | <code>const memorySpecDefinitions: readonly [SpecSchemaDefinition&lt;MemorySpec&gt;]</code> | Memory Spec Definitions constant exported by the `index` module. |
+| `memorySpecExample` | constant | <code>const memorySpecExample: MemorySpec</code> | Valid example value for Memory Spec. |
+| `memorySpecJsonSchema` | constant | <code>const memorySpecJsonSchema: JsonSchema</code> | JSON Schema for Memory Spec. |
+| `memorySpecJsonSchemas` | constant | <code>const memorySpecJsonSchemas: Record&lt;string, JsonSchema&gt;</code> | Memory Spec JSON Schemas constant exported by the `index` module. |
+| `memorySpecSchema` | constant | <code>const memorySpecSchema: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodString; } &amp; { name: z.ZodOptional&lt;z.ZodString&gt;; description: z.ZodOptional&lt;z.ZodString&gt;; owner: z.ZodOptional&lt;z.ZodString&gt;; tags: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; createdAt: z.ZodOptional&lt;z.ZodString&gt;; updatedAt: z.ZodOptional&lt;z.ZodString&gt;; } &amp; { providers: z.ZodArray&lt;z.ZodObject&lt;{ id: z.ZodString; type: z.ZodEnum&lt;["structured", "v...</code> | Runtime schema for Memory Spec. |
+| `memoryTypeSchema` | constant | <code>const memoryTypeSchema: z.ZodEnum&lt;["working", "episodic", "semantic", "procedural", "artifact", "governance"]&gt;</code> | Runtime schema for Memory Type. |
+| `validateMemorySpec` | function | <code>validateMemorySpec(input: unknown): MemorySpec</code> | Validate Memory Spec function with 1 public call signature; parameters and return types are listed below. |
+| `ArtifactMeta` | interface | <code>interface ArtifactMeta</code> | Artifact Meta interface with 4 public fields or methods. |
+| `ArtifactRef` | interface | <code>interface ArtifactRef</code> | Artifact Ref interface with 3 public fields or methods. |
+| `ArtifactStoreProvider` | interface | <code>interface ArtifactStoreProvider</code> | Artifact Store Provider interface with 3 public fields or methods. |
+| `EmbeddingProvider` | interface | <code>interface EmbeddingProvider</code> | Embedding Provider interface with 1 public fields or methods. |
+| `MemoryAuditOptions` | interface | <code>interface MemoryAuditOptions</code> | Memory Audit Options interface with 2 public fields or methods. |
+| `MemoryAuditReport` | interface | <code>interface MemoryAuditReport</code> | Memory Audit Report interface with 3 public fields or methods. |
+| `MemoryManagerOptions` | interface | <code>interface MemoryManagerOptions</code> | Memory Manager Options interface with 4 public fields or methods. |
+| `MemoryManagerRecoveryOptions` | interface | <code>interface MemoryManagerRecoveryOptions</code> | Memory Manager Recovery Options interface with 5 public fields or methods. |
+| `MemoryProvider` | interface | <code>interface MemoryProvider</code> | Memory Provider interface with 7 public fields or methods. |
+| `MemoryProviderProfile` | interface | <code>interface MemoryProviderProfile</code> | Memory Provider Profile interface with 4 public fields or methods. |
+| `MemoryReadQuery` | interface | <code>interface MemoryReadQuery</code> | Memory Read Query interface with 3 public fields or methods. |
+| `MemoryRecord` | interface | <code>interface MemoryRecord</code> | Memory Record interface with 10 public fields or methods. |
+| `MemoryRetrievalPolicy` | interface | <code>interface MemoryRetrievalPolicy</code> | Memory Retrieval Policy interface with 5 public fields or methods. |
+| `MemoryScope` | interface | <code>interface MemoryScope</code> | Memory Scope interface with 4 public fields or methods. |
+| `MemorySearchQuery` | interface | <code>interface MemorySearchQuery</code> | Memory Search Query interface with 4 public fields or methods. |
+| `MemorySearchResult` | interface | <code>interface MemorySearchResult</code> | Memory Search Result interface with 3 public fields or methods. |
+| `MemorySpec` | interface | <code>interface MemorySpec extends VersionedSpec, SpecMetadata</code> | Memory Spec interface with 23 public fields or methods. |
+| `MemorySummary` | interface | <code>interface MemorySummary</code> | Memory Summary interface with 3 public fields or methods. |
+| `MemorySummaryOptions` | interface | <code>interface MemorySummaryOptions</code> | Memory Summary Options interface with 2 public fields or methods. |
+| `MemoryTraceContext` | interface | <code>interface MemoryTraceContext</code> | Memory Trace Context interface with 7 public fields or methods. |
+| `MemoryWritePolicy` | interface | <code>interface MemoryWritePolicy</code> | Memory Write Policy interface with 4 public fields or methods. |
+| `MemoryWriteResult` | interface | <code>interface MemoryWriteResult</code> | Memory Write Result interface with 3 public fields or methods. |
+| `StructuredQuery` | interface | <code>interface StructuredQuery</code> | Structured Query interface with 3 public fields or methods. |
+| `StructuredStoreProvider` | interface | <code>interface StructuredStoreProvider</code> | Structured Store Provider interface with 7 public fields or methods. |
+| `VectorIndexProvider` | interface | <code>interface VectorIndexProvider</code> | Vector Index Provider interface with 3 public fields or methods. |
+| `VectorQuery` | interface | <code>interface VectorQuery</code> | Vector Query interface with 3 public fields or methods. |
+| `VectorRecord` | interface | <code>interface VectorRecord</code> | Vector Record interface with 3 public fields or methods. |
+| `VectorSearchResult` | interface | <code>interface VectorSearchResult</code> | Vector Search Result interface with 3 public fields or methods. |
+| `MemoryType` | type | <code>type MemoryType = 'working' &#124; 'episodic' &#124; 'semantic' &#124; 'procedural' &#124; 'artifact' &#124; 'governance'</code> | Public type alias for Memory Type; the declaration contains its complete type expression. |
 
-## `MemoryManager` public members
+## `MemoryManager`
+
+Memory Manager class with 16 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { MemoryManager } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare class MemoryManager {
+    constructor(provider: MemoryProvider | MemoryManagementProvider, options?: MemoryManagerOptions);
+    capabilities(): Promise<MemoryManagementCapabilities>;
+    add(request: MemoryAddRequest): Promise<ManagedMemoryWriteResult>;
+    read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
+    search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
+    search(request: ManagedMemorySearchRequest): Promise<ManagedMemorySearchResult[]>;
+    write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise<MemoryWriteResult>;
+    update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void>;
+    update(request: ManagedMemoryUpdateRequest): Promise<ManagedMemoryWriteResult>;
+    get(request: MemoryGetRequest): Promise<ManagedMemoryRecord | null>;
+    list(request: MemoryListRequest): Promise<MemoryListResult>;
+    delete(request: ManagedMemoryDeleteRequest): Promise<ManagedMemoryDeleteResult>;
+    history(request: MemoryHistoryRequest): Promise<MemoryVersion[]>;
+    health(): Promise<ProviderHealth>;
+    close(): Promise<void>;
+    invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void>;
+    summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary>;
+    audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `add` | method | <code>add(request: MemoryAddRequest): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public runtime operation for add. |
-| `audit` | method | <code>audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise&lt;MemoryAuditReport&gt;</code> | Public runtime operation for audit. |
-| `capabilities` | method | <code>capabilities(): Promise&lt;MemoryManagementCapabilities&gt;</code> | Public runtime operation for capabilities. |
-| `close` | method | <code>close(): Promise&lt;void&gt;</code> | Public runtime operation for close. |
+| `add` | method | <code>add(request: MemoryAddRequest): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `audit` | method | <code>audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise&lt;MemoryAuditReport&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `capabilities` | method | <code>capabilities(): Promise&lt;MemoryManagementCapabilities&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `close` | method | <code>close(): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(provider: MemoryProvider &#124; MemoryManagementProvider, options?: MemoryManagerOptions): MemoryManager</code> | Creates an instance of this class. |
-| `delete` | method | <code>delete(request: ManagedMemoryDeleteRequest): Promise&lt;ManagedMemoryDeleteResult&gt;</code> | Deletes delete at this module boundary. |
-| `get` | method | <code>get(request: MemoryGetRequest): Promise&lt;ManagedMemoryRecord &#124; null&gt;</code> | Gets get at this module boundary. |
-| `health` | method | <code>health(): Promise&lt;ProviderHealth&gt;</code> | Public runtime operation for health. |
-| `history` | method | <code>history(request: MemoryHistoryRequest): Promise&lt;MemoryVersion[]&gt;</code> | Public runtime operation for history. |
-| `invalidate` | method | <code>invalidate(scope: MemoryScope, recordId: string, reason: string): Promise&lt;void&gt;</code> | Public runtime operation for invalidate. |
-| `list` | method | <code>list(request: MemoryListRequest): Promise&lt;MemoryListResult&gt;</code> | Lists list at this module boundary. |
-| `read` | method | <code>read(scope: MemoryScope, query: MemoryReadQuery): Promise&lt;MemoryRecord[]&gt;</code> | Public runtime operation for read. |
-| `search` | method | <code>search(scope: MemoryScope, query: MemorySearchQuery): Promise&lt;MemorySearchResult[]&gt; &#124; search(request: ManagedMemorySearchRequest): Promise&lt;ManagedMemorySearchResult[]&gt;</code> | Public runtime operation for search. |
-| `summarize` | method | <code>summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise&lt;MemorySummary&gt;</code> | Public runtime operation for summarize. |
-| `update` | method | <code>update(scope: MemoryScope, recordId: string, patch: Partial&lt;MemoryRecord&gt;): Promise&lt;void&gt; &#124; update(request: ManagedMemoryUpdateRequest): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public runtime operation for update. |
-| `write` | method | <code>write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise&lt;MemoryWriteResult&gt;</code> | Public runtime operation for write. |
+| `delete` | method | <code>delete(request: ManagedMemoryDeleteRequest): Promise&lt;ManagedMemoryDeleteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get(request: MemoryGetRequest): Promise&lt;ManagedMemoryRecord &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `health` | method | <code>health(): Promise&lt;ProviderHealth&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `history` | method | <code>history(request: MemoryHistoryRequest): Promise&lt;MemoryVersion[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `invalidate` | method | <code>invalidate(scope: MemoryScope, recordId: string, reason: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `list` | method | <code>list(request: MemoryListRequest): Promise&lt;MemoryListResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `read` | method | <code>read(scope: MemoryScope, query: MemoryReadQuery): Promise&lt;MemoryRecord[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `search` | method | <code>search(scope: MemoryScope, query: MemorySearchQuery): Promise&lt;MemorySearchResult[]&gt; &#124; search(request: ManagedMemorySearchRequest): Promise&lt;ManagedMemorySearchResult[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `summarize` | method | <code>summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise&lt;MemorySummary&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `update` | method | <code>update(scope: MemoryScope, recordId: string, patch: Partial&lt;MemoryRecord&gt;): Promise&lt;void&gt; &#124; update(request: ManagedMemoryUpdateRequest): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `write` | method | <code>write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise&lt;MemoryWriteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `ArtifactMeta` contract members
+## `memoryProviderProfileSchema`
+
+Runtime schema for Memory Provider Profile.
+
+- Kind: constant
+- Import: `import { memoryProviderProfileSchema } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memoryProviderProfileSchema: z.ZodObject<{ id: z.ZodString; type: z.ZodEnum<["structured", "vector", "artifact", "hybrid"]>; providerRef: z.ZodString; configSchema: z.ZodOptional<z.ZodType<JsonSchema, z.ZodTypeDef, JsonSchema>>; }, "strip", z.ZodTypeAny, { id: string; type: "artifact" | "structured" | "vector" | "hybrid"; providerRef: string; configSchema?: JsonSchema | undefined; }, { id: string; type: "artifact" | "structured" | "vector" | "hybrid"; providerRef: string; configSchema?: JsonSchema | undefined; }>;
+```
+
+## `memoryRetrievalPolicySchema`
+
+Runtime schema for Memory Retrieval Policy.
+
+- Kind: constant
+- Import: `import { memoryRetrievalPolicySchema } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memoryRetrievalPolicySchema: z.ZodObject<{ defaultTopK: z.ZodOptional<z.ZodNumber>; vectorWeight: z.ZodOptional<z.ZodNumber>; textWeight: z.ZodOptional<z.ZodNumber>; requireScope: z.ZodOptional<z.ZodBoolean>; allowedTypes: z.ZodOptional<z.ZodArray<z.ZodEnum<["working", "episodic", "semantic", "procedural", "artifact", "governance"]>, "many">>; }, "strip", z.ZodTypeAny, { defaultTopK?: number | undefined; vectorWeight?: number | undefined; textWeight?: number | undefined; requireScope?: boolean | undefined; allowedTypes?: ("working" | "episodic" | "semantic" | "procedural" | "artifact" | "governance")[] | undefined; }, { defaultTopK?: number | undefined; vectorWeight?: number | undefined; textWeight?: number | undefined; requireScope?: boolean | undefined; allowedTypes?: ("working" | "episodic" | "semantic" | "procedural" | "artifact" | "governance")[] | undefined; }>;
+```
+
+## `memorySpecDefinition`
+
+Runtime validation entrypoint for the Memory spec, combining its parser, example and JSON Schema.
+
+- Kind: constant
+- Import: `import { memorySpecDefinition } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memorySpecDefinition: SpecSchemaDefinition<MemorySpec>;
+```
+
+## `memorySpecDefinitions`
+
+Memory Spec Definitions constant exported by the `index` module.
+
+- Kind: constant
+- Import: `import { memorySpecDefinitions } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memorySpecDefinitions: readonly [SpecSchemaDefinition<MemorySpec>];
+```
+
+## `memorySpecExample`
+
+Valid example value for Memory Spec.
+
+- Kind: constant
+- Import: `import { memorySpecExample } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memorySpecExample: MemorySpec;
+```
+
+## `memorySpecJsonSchema`
+
+JSON Schema for Memory Spec.
+
+- Kind: constant
+- Import: `import { memorySpecJsonSchema } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memorySpecJsonSchema: JsonSchema;
+```
+
+## `memorySpecJsonSchemas`
+
+Memory Spec JSON Schemas constant exported by the `index` module.
+
+- Kind: constant
+- Import: `import { memorySpecJsonSchemas } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memorySpecJsonSchemas: Record<string, JsonSchema>;
+```
+
+## `memorySpecSchema`
+
+Runtime schema for Memory Spec.
+
+- Kind: constant
+- Import: `import { memorySpecSchema } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+// Exact type resolved from the package entrypoint; see source for the compiler expansion.
+export declare const memorySpecSchema: (typeof import('@codesoul-co/hypha-memory'))['memorySpecSchema'];
+```
+
+> This compiler-expanded constant type is compacted. Its public name, top-level type, and source location remain here; use the module’s exported interfaces, types, or runtime schema for input/output fields.
+
+## `memoryTypeSchema`
+
+Runtime schema for Memory Type.
+
+- Kind: constant
+- Import: `import { memoryTypeSchema } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare const memoryTypeSchema: z.ZodEnum<["working", "episodic", "semantic", "procedural", "artifact", "governance"]>;
+```
+
+## `validateMemorySpec`
+
+Validate Memory Spec function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { validateMemorySpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export declare function validateMemorySpec(input: unknown): MemorySpec;
+```
+
+### Call signature
+
+```text
+validateMemorySpec(input: unknown): MemorySpec
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | <code>unknown</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `MemorySpec`
+- Description: The return contract is defined by the type shown above.
+
+## `ArtifactMeta`
+
+Artifact Meta interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ArtifactMeta } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface ArtifactMeta {
+    contentType?: string;
+    sizeBytes?: number;
+    hash?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `contentType` | property | <code>contentType: string</code> | Public content Type property. |
-| `hash` | property | <code>hash: string</code> | Public hash property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `sizeBytes` | property | <code>sizeBytes: number</code> | Public size Bytes property. |
+| `contentType` | property | <code>contentType?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `hash` | property | <code>hash?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sizeBytes` | property | <code>sizeBytes?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ArtifactRef` contract members
+## `ArtifactRef`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `meta` | property | <code>meta: ArtifactMeta</code> | Public meta property. |
-| `path` | property | <code>path: string</code> | Public path property. |
+Artifact Ref interface with 3 public fields or methods.
 
-## `ArtifactStoreProvider` contract members
+- Kind: interface
+- Import: `import type { ArtifactRef } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `delete` | method | <code>delete(ref: ArtifactRef): Promise&lt;void&gt;</code> | Deletes delete at this module boundary. |
-| `get` | method | <code>get(ref: ArtifactRef): Promise&lt;Buffer&gt;</code> | Gets get at this module boundary. |
-| `put` | method | <code>put(path: string, content: Buffer &#124; string, meta?: ArtifactMeta): Promise&lt;ArtifactRef&gt;</code> | Public runtime operation for put. |
+### Declaration
 
-## `EmbeddingProvider` contract members
+```text
+export interface ArtifactRef {
+    id: string;
+    path: string;
+    meta?: ArtifactMeta;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `embed` | method | <code>embed(input: string[]): Promise&lt;number[][]&gt;</code> | Public runtime operation for embed. |
-
-## `MemoryAuditOptions` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `since` | property | <code>since: string</code> | Public since property. |
-| `until` | property | <code>until: string</code> | Public until property. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `meta` | property | <code>meta?: ArtifactMeta</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `path` | property | <code>path: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `MemoryAuditReport` contract members
+## `ArtifactStoreProvider`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `missingProvenance` | property | <code>missingProvenance: string[]</code> | Public missing Provenance property. |
-| `recordsChecked` | property | <code>recordsChecked: number</code> | Public records Checked property. |
-| `scope` | property | <code>scope: MemoryScope</code> | Public scope property. |
+Artifact Store Provider interface with 3 public fields or methods.
 
-## `MemoryManagerOptions` contract members
+- Kind: interface
+- Import: `import type { ArtifactStoreProvider } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `recovery` | property | <code>recovery: MemoryManagerRecoveryOptions</code> | Public recovery property. |
-| `trace` | property | <code>trace: TraceRecorder</code> | Public trace property. |
-| `traceContext` | property | <code>traceContext: MemoryTraceContext</code> | Public trace Context property. |
+### Declaration
 
-## `MemoryManagerRecoveryOptions` contract members
+```text
+export interface ArtifactStoreProvider {
+    put(path: string, content: Buffer | string, meta?: ArtifactMeta): Promise<ArtifactRef>;
+    get(ref: ArtifactRef): Promise<Buffer>;
+    delete(ref: ArtifactRef): Promise<void>;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `onFailure` | method | <code>onFailure(failure: RecoveryFailure): void &#124; Promise&lt;void&gt;</code> | Handles Failure at this module boundary. |
-| `policyRevision` | property | <code>policyRevision: string</code> | Public policy Revision property. |
-| `providerId` | property | <code>providerId: string</code> | Public provider Id property. |
-| `providerRevision` | property | <code>providerRevision: string</code> | Public provider Revision property. |
-| `specRevision` | property | <code>specRevision: string</code> | Public spec Revision property. |
-
-## `MemoryProvider` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `audit` | method | <code>audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise&lt;MemoryAuditReport&gt;</code> | Public runtime operation for audit. |
-| `invalidate` | method | <code>invalidate(scope: MemoryScope, recordId: string, reason: string): Promise&lt;void&gt;</code> | Public runtime operation for invalidate. |
-| `read` | method | <code>read(scope: MemoryScope, query: MemoryReadQuery): Promise&lt;MemoryRecord[]&gt;</code> | Public runtime operation for read. |
-| `search` | method | <code>search(scope: MemoryScope, query: MemorySearchQuery): Promise&lt;MemorySearchResult[]&gt;</code> | Public runtime operation for search. |
-| `summarize` | method | <code>summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise&lt;MemorySummary&gt;</code> | Public runtime operation for summarize. |
-| `update` | method | <code>update(scope: MemoryScope, recordId: string, patch: Partial&lt;MemoryRecord&gt;): Promise&lt;void&gt;</code> | Public runtime operation for update. |
-| `write` | method | <code>write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise&lt;MemoryWriteResult&gt;</code> | Public runtime operation for write. |
+| `delete` | method | <code>delete(ref: ArtifactRef): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get(ref: ArtifactRef): Promise&lt;Buffer&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `put` | method | <code>put(path: string, content: Buffer &#124; string, meta?: ArtifactMeta): Promise&lt;ArtifactRef&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `MemoryProviderProfile` contract members
+## `EmbeddingProvider`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `configSchema` | property | <code>configSchema: JsonSchema</code> | Public config schema property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `providerRef` | property | <code>providerRef: string</code> | Public provider Ref property. |
-| `type` | property | <code>type: "artifact" &#124; "structured" &#124; "vector" &#124; "hybrid"</code> | Public type property. |
+Embedding Provider interface with 1 public fields or methods.
 
-## `MemoryReadQuery` contract members
+- Kind: interface
+- Import: `import type { EmbeddingProvider } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `ids` | property | <code>ids: string[]</code> | Public ids property. |
-| `limit` | property | <code>limit: number</code> | Public limit property. |
-| `type` | property | <code>type: MemoryType</code> | Public type property. |
+### Declaration
 
-## `MemoryRecord` contract members
+```text
+export interface EmbeddingProvider {
+    embed(input: string[]): Promise<number[][]>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `confidence` | property | <code>confidence: number</code> | Public confidence property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `expiresAt` | property | <code>expiresAt: string</code> | Public expires At property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public provenance property. |
-| `source` | property | <code>source: string</code> | Public source property. |
-| `type` | property | <code>type: MemoryType</code> | Public type property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `value` | property | <code>value: TValue</code> | Public value property. |
-| `visibility` | property | <code>visibility: "workspace" &#124; "private" &#124; "public"</code> | Public visibility property. |
+| `embed` | method | <code>embed(input: string[]): Promise&lt;number[][]&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `MemoryRetrievalPolicy` contract members
+## `MemoryAuditOptions`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `allowedTypes` | property | <code>allowedTypes: MemoryType[]</code> | Public allowed Types property. |
-| `defaultTopK` | property | <code>defaultTopK: number</code> | Public default Top K property. |
-| `requireScope` | property | <code>requireScope: boolean</code> | Public require Scope property. |
-| `textWeight` | property | <code>textWeight: number</code> | Public text Weight property. |
-| `vectorWeight` | property | <code>vectorWeight: number</code> | Public vector Weight property. |
+Memory Audit Options interface with 2 public fields or methods.
 
-## `MemoryScope` contract members
+- Kind: interface
+- Import: `import type { MemoryAuditOptions } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryAuditOptions {
+    since?: string;
+    until?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `userId` | property | <code>userId: string</code> | Public user Id property. |
-| `workspaceId` | property | <code>workspaceId: string</code> | Public workspace Id property. |
+| `since` | property | <code>since?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `until` | property | <code>until?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `MemorySearchQuery` contract members
+## `MemoryAuditReport`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `text` | property | <code>text: string</code> | Public text property. |
-| `topK` | property | <code>topK: number</code> | Public top K property. |
-| `type` | property | <code>type: MemoryType</code> | Public type property. |
-| `vector` | property | <code>vector: number[]</code> | Public vector property. |
+Memory Audit Report interface with 3 public fields or methods.
 
-## `MemorySearchResult` contract members
+- Kind: interface
+- Import: `import type { MemoryAuditReport } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public provenance property. |
-| `record` | property | <code>record: MemoryRecord&lt;unknown&gt;</code> | Public record property. |
-| `score` | property | <code>score: number</code> | Public score property. |
+### Declaration
 
-## `MemorySpec` contract members
+```text
+export interface MemoryAuditReport {
+    scope: MemoryScope;
+    recordsChecked: number;
+    missingProvenance: string[];
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `artifactStoreRef` | property | <code>artifactStoreRef: string</code> | Public artifact Store Ref property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `embeddingProviderRef` | property | <code>embeddingProviderRef: string</code> | Public embedding Provider Ref property. |
-| `freshnessPolicy` | property | <code>freshnessPolicy: string</code> | Public freshness Policy property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `memoryTypes` | property | <code>memoryTypes: MemoryType[]</code> | Public memory Types property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `privacyPolicy` | property | <code>privacyPolicy: string</code> | Public privacy Policy property. |
-| `provenancePolicy` | property | <code>provenancePolicy: "required" &#124; "best_effort"</code> | Public provenance Policy property. |
-| `providers` | property | <code>providers: MemoryProviderProfile[]</code> | Public providers property. |
-| `readPolicy` | property | <code>readPolicy: string</code> | Public read Policy property. |
-| `retentionPolicy` | property | <code>retentionPolicy: string</code> | Public retention Policy property. |
-| `retrievalPolicy` | property | <code>retrievalPolicy: MemoryRetrievalPolicy</code> | Public retrieval Policy property. |
-| `retrievalStrategy` | property | <code>retrievalStrategy: string</code> | Public retrieval Strategy property. |
-| `structuredStoreRef` | property | <code>structuredStoreRef: string</code> | Public structured Store Ref property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `vectorIndexRef` | property | <code>vectorIndexRef: string</code> | Public vector Index Ref property. |
-| `version` | property | <code>version: string</code> | Public version property. |
-| `writePolicy` | property | <code>writePolicy: string</code> | Public write Policy property. |
-| `writePolicyConfig` | property | <code>writePolicyConfig: MemoryWritePolicy</code> | Public write Policy Config property. |
-
-## `MemorySummary` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `recordCount` | property | <code>recordCount: number</code> | Public record Count property. |
-| `scope` | property | <code>scope: MemoryScope</code> | Public scope property. |
-| `types` | property | <code>types: Partial&lt;Record&lt;MemoryType, number&gt;&gt;</code> | Public types property. |
+| `missingProvenance` | property | <code>missingProvenance: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `recordsChecked` | property | <code>recordsChecked: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: MemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `MemorySummaryOptions` contract members
+## `MemoryManagerOptions`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `limit` | property | <code>limit: number</code> | Public limit property. |
-| `type` | property | <code>type: MemoryType</code> | Public type property. |
+Memory Manager Options interface with 4 public fields or methods.
 
-## `MemoryTraceContext` contract members
+- Kind: interface
+- Import: `import type { MemoryManagerOptions } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agentId` | property | <code>agentId: string</code> | Public agent Id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `userId` | property | <code>userId: string</code> | Public user Id property. |
-| `workspaceId` | property | <code>workspaceId: string</code> | Public workspace Id property. |
+### Declaration
 
-## `MemoryWritePolicy` contract members
+```text
+export interface MemoryManagerOptions {
+    trace?: TraceRecorder;
+    traceContext?: MemoryTraceContext;
+    now?: () => string;
+    recovery?: MemoryManagerRecoveryOptions;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `allowLongTerm` | property | <code>allowLongTerm: boolean</code> | Public allow Long Term property. |
-| `decision` | property | <code>decision: PolicyDecision</code> | Public decision property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `requireProvenance` | property | <code>requireProvenance: boolean</code> | Public require Provenance property. |
-
-## `MemoryWriteResult` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `artifactRef` | property | <code>artifactRef: ArtifactRef</code> | Public artifact Ref property. |
-| `recordId` | property | <code>recordId: string</code> | Public record Id property. |
-| `vectorIndexed` | property | <code>vectorIndexed: boolean</code> | Public vector Indexed property. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `recovery` | property | <code>recovery?: MemoryManagerRecoveryOptions</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `trace` | property | <code>trace?: TraceRecorder</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `traceContext` | property | <code>traceContext?: MemoryTraceContext</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `StructuredQuery` contract members
+## `MemoryManagerRecoveryOptions`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `limit` | property | <code>limit: number</code> | Public limit property. |
-| `orderBy` | property | <code>orderBy: string</code> | Public order By property. |
-| `where` | property | <code>where: Record&lt;string, unknown&gt;</code> | Public where property. |
+Memory Manager Recovery Options interface with 5 public fields or methods.
 
-## `StructuredStoreProvider` contract members
+- Kind: interface
+- Import: `import type { MemoryManagerRecoveryOptions } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `compareAndSet` | method | <code>compareAndSet&lt;T&gt;(table: string, id: string, expected: Partial&lt;T&gt;, patch: Partial&lt;T&gt;): Promise&lt;boolean&gt;</code> | Public runtime operation for compare And Set. |
-| `delete` | method | <code>delete(table: string, id: string): Promise&lt;void&gt;</code> | Deletes delete at this module boundary. |
-| `get` | method | <code>get&lt;T&gt;(table: string, id: string): Promise&lt;T &#124; null&gt;</code> | Gets get at this module boundary. |
-| `insert` | method | <code>insert&lt;T extends { id: string; }&gt;(table: string, record: T): Promise&lt;void&gt;</code> | Public runtime operation for insert. |
-| `query` | method | <code>query&lt;T&gt;(table: string, query: StructuredQuery): Promise&lt;T[]&gt;</code> | Public runtime operation for query. |
-| `transaction` | method | <code>transaction&lt;T&gt;(fn: (tx: StructuredStoreProvider) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt;</code> | Public runtime operation for transaction. |
-| `update` | method | <code>update&lt;T&gt;(table: string, id: string, patch: Partial&lt;T&gt;): Promise&lt;void&gt;</code> | Public runtime operation for update. |
+### Declaration
 
-## `VectorIndexProvider` contract members
+```text
+export interface MemoryManagerRecoveryOptions {
+    providerId?: string;
+    providerRevision?: string;
+    specRevision?: string;
+    policyRevision?: string;
+    onFailure?: (failure: RecoveryFailure) => void | Promise<void>;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `delete` | method | <code>delete(ids: string[]): Promise&lt;void&gt;</code> | Deletes delete at this module boundary. |
-| `search` | method | <code>search(query: VectorQuery): Promise&lt;VectorSearchResult[]&gt;</code> | Public runtime operation for search. |
-| `upsert` | method | <code>upsert(records: VectorRecord[]): Promise&lt;void&gt;</code> | Public runtime operation for upsert. |
-
-## `VectorQuery` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `filter` | property | <code>filter: Record&lt;string, unknown&gt;</code> | Public filter property. |
-| `topK` | property | <code>topK: number</code> | Public top K property. |
-| `vector` | property | <code>vector: number[]</code> | Public vector property. |
+| `onFailure` | method | <code>onFailure?(failure: RecoveryFailure): void &#124; Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `policyRevision` | property | <code>policyRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerId` | property | <code>providerId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerRevision` | property | <code>providerRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `specRevision` | property | <code>specRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `VectorRecord` contract members
+## `MemoryProvider`
+
+Memory Provider interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryProvider } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryProvider {
+    read(scope: MemoryScope, query: MemoryReadQuery): Promise<MemoryRecord[]>;
+    search(scope: MemoryScope, query: MemorySearchQuery): Promise<MemorySearchResult[]>;
+    write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise<MemoryWriteResult>;
+    update(scope: MemoryScope, recordId: string, patch: Partial<MemoryRecord>): Promise<void>;
+    invalidate(scope: MemoryScope, recordId: string, reason: string): Promise<void>;
+    summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise<MemorySummary>;
+    audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise<MemoryAuditReport>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `vector` | property | <code>vector: number[]</code> | Public vector property. |
+| `audit` | method | <code>audit(scope: MemoryScope, options?: MemoryAuditOptions): Promise&lt;MemoryAuditReport&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `invalidate` | method | <code>invalidate(scope: MemoryScope, recordId: string, reason: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `read` | method | <code>read(scope: MemoryScope, query: MemoryReadQuery): Promise&lt;MemoryRecord[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `search` | method | <code>search(scope: MemoryScope, query: MemorySearchQuery): Promise&lt;MemorySearchResult[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `summarize` | method | <code>summarize(scope: MemoryScope, options?: MemorySummaryOptions): Promise&lt;MemorySummary&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `update` | method | <code>update(scope: MemoryScope, recordId: string, patch: Partial&lt;MemoryRecord&gt;): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `write` | method | <code>write(scope: MemoryScope, record: MemoryRecord, policy: MemoryWritePolicy): Promise&lt;MemoryWriteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `VectorSearchResult` contract members
+## `MemoryProviderProfile`
+
+Memory Provider Profile interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryProviderProfile } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryProviderProfile {
+    id: string;
+    type: 'structured' | 'vector' | 'artifact' | 'hybrid';
+    providerRef: string;
+    configSchema?: JsonSchema;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `score` | property | <code>score: number</code> | Public score property. |
+| `configSchema` | property | <code>configSchema?: JsonSchema</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providerRef` | property | <code>providerRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: "artifact" &#124; "structured" &#124; "vector" &#124; "hybrid"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryReadQuery`
+
+Memory Read Query interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryReadQuery } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryReadQuery {
+    ids?: string[];
+    type?: MemoryType;
+    limit?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `ids` | property | <code>ids?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `limit` | property | <code>limit?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type?: MemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryRecord`
+
+Memory Record interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryRecord } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryRecord<TValue = unknown> {
+    id: string;
+    type: MemoryType;
+    value: TValue;
+    source?: string;
+    confidence?: number;
+    provenance: Record<string, unknown>;
+    visibility?: 'private' | 'workspace' | 'public';
+    expiresAt?: string;
+    createdAt: string;
+    updatedAt?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `confidence` | property | <code>confidence?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expiresAt` | property | <code>expiresAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `source` | property | <code>source?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: MemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `value` | property | <code>value: TValue</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `visibility` | property | <code>visibility?: "workspace" &#124; "private" &#124; "public"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryRetrievalPolicy`
+
+Memory Retrieval Policy interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryRetrievalPolicy } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryRetrievalPolicy {
+    defaultTopK?: number;
+    vectorWeight?: number;
+    textWeight?: number;
+    requireScope?: boolean;
+    allowedTypes?: MemoryType[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowedTypes` | property | <code>allowedTypes?: MemoryType[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `defaultTopK` | property | <code>defaultTopK?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requireScope` | property | <code>requireScope?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `textWeight` | property | <code>textWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vectorWeight` | property | <code>vectorWeight?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryScope`
+
+Memory Scope interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryScope } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryScope {
+    workspaceId?: string;
+    sessionId?: string;
+    runId?: string;
+    userId?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `runId` | property | <code>runId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `userId` | property | <code>userId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `workspaceId` | property | <code>workspaceId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemorySearchQuery`
+
+Memory Search Query interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemorySearchQuery } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemorySearchQuery {
+    text?: string;
+    vector?: number[];
+    type?: MemoryType;
+    topK?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `text` | property | <code>text?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `topK` | property | <code>topK?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type?: MemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vector` | property | <code>vector?: number[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemorySearchResult`
+
+Memory Search Result interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemorySearchResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemorySearchResult {
+    record: MemoryRecord;
+    score?: number;
+    provenance: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `record` | property | <code>record: MemoryRecord&lt;unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `score` | property | <code>score?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemorySpec`
+
+Memory Spec interface with 23 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemorySpec } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemorySpec extends VersionedSpec, SpecMetadata {
+    providers: MemoryProviderProfile[];
+    memoryTypes: MemoryType[];
+    structuredStoreRef?: string;
+    vectorIndexRef?: string;
+    artifactStoreRef?: string;
+    embeddingProviderRef?: string;
+    readPolicy?: string;
+    writePolicy?: string;
+    freshnessPolicy?: string;
+    provenancePolicy?: 'required' | 'best_effort';
+    retentionPolicy?: string;
+    privacyPolicy?: string;
+    retrievalStrategy?: string;
+    retrievalPolicy?: MemoryRetrievalPolicy;
+    writePolicyConfig?: MemoryWritePolicy;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `artifactStoreRef` | property | <code>artifactStoreRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `embeddingProviderRef` | property | <code>embeddingProviderRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `freshnessPolicy` | property | <code>freshnessPolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryTypes` | property | <code>memoryTypes: MemoryType[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `privacyPolicy` | property | <code>privacyPolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenancePolicy` | property | <code>provenancePolicy?: "required" &#124; "best_effort"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `providers` | property | <code>providers: MemoryProviderProfile[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `readPolicy` | property | <code>readPolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retentionPolicy` | property | <code>retentionPolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retrievalPolicy` | property | <code>retrievalPolicy?: MemoryRetrievalPolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retrievalStrategy` | property | <code>retrievalStrategy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `structuredStoreRef` | property | <code>structuredStoreRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vectorIndexRef` | property | <code>vectorIndexRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `writePolicy` | property | <code>writePolicy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `writePolicyConfig` | property | <code>writePolicyConfig?: MemoryWritePolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemorySummary`
+
+Memory Summary interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemorySummary } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemorySummary {
+    scope: MemoryScope;
+    recordCount: number;
+    types: Partial<Record<MemoryType, number>>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `recordCount` | property | <code>recordCount: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: MemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `types` | property | <code>types: Partial&lt;Record&lt;MemoryType, number&gt;&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemorySummaryOptions`
+
+Memory Summary Options interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemorySummaryOptions } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemorySummaryOptions {
+    type?: MemoryType;
+    limit?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `limit` | property | <code>limit?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type?: MemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryTraceContext`
+
+Memory Trace Context interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryTraceContext } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryTraceContext {
+    runId?: string;
+    stepId?: string;
+    sessionId?: string;
+    userId?: string;
+    agentId?: string;
+    workspaceId?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agentId` | property | <code>agentId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `userId` | property | <code>userId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `workspaceId` | property | <code>workspaceId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryWritePolicy`
+
+Memory Write Policy interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryWritePolicy } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryWritePolicy {
+    allowLongTerm?: boolean;
+    requireProvenance?: boolean;
+    decision?: PolicyDecision;
+    idempotencyKey?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowLongTerm` | property | <code>allowLongTerm?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `decision` | property | <code>decision?: PolicyDecision</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requireProvenance` | property | <code>requireProvenance?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryWriteResult`
+
+Memory Write Result interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryWriteResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryWriteResult {
+    recordId: string;
+    vectorIndexed?: boolean;
+    artifactRef?: ArtifactRef;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `artifactRef` | property | <code>artifactRef?: ArtifactRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `recordId` | property | <code>recordId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vectorIndexed` | property | <code>vectorIndexed?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `StructuredQuery`
+
+Structured Query interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { StructuredQuery } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface StructuredQuery {
+    where?: Record<string, unknown>;
+    limit?: number;
+    orderBy?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `limit` | property | <code>limit?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `orderBy` | property | <code>orderBy?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `where` | property | <code>where?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `StructuredStoreProvider`
+
+Structured Store Provider interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { StructuredStoreProvider } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface StructuredStoreProvider {
+    get<T>(table: string, id: string): Promise<T | null>;
+    insert<T extends {
+        id: string;
+    }>(table: string, record: T): Promise<void>;
+    update<T>(table: string, id: string, patch: Partial<T>): Promise<void>;
+    compareAndSet?<T>(table: string, id: string, expected: Partial<T>, patch: Partial<T>): Promise<boolean>;
+    delete(table: string, id: string): Promise<void>;
+    query<T>(table: string, query: StructuredQuery): Promise<T[]>;
+    transaction<T>(fn: (tx: StructuredStoreProvider) => Promise<T>): Promise<T>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `compareAndSet` | method | <code>compareAndSet?&lt;T&gt;(table: string, id: string, expected: Partial&lt;T&gt;, patch: Partial&lt;T&gt;): Promise&lt;boolean&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `delete` | method | <code>delete(table: string, id: string): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get&lt;T&gt;(table: string, id: string): Promise&lt;T &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `insert` | method | <code>insert&lt;T extends { id: string; }&gt;(table: string, record: T): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `query` | method | <code>query&lt;T&gt;(table: string, query: StructuredQuery): Promise&lt;T[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `transaction` | method | <code>transaction&lt;T&gt;(fn: (tx: StructuredStoreProvider) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `update` | method | <code>update&lt;T&gt;(table: string, id: string, patch: Partial&lt;T&gt;): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `VectorIndexProvider`
+
+Vector Index Provider interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { VectorIndexProvider } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface VectorIndexProvider {
+    upsert(records: VectorRecord[]): Promise<void>;
+    search(query: VectorQuery): Promise<VectorSearchResult[]>;
+    delete(ids: string[]): Promise<void>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `delete` | method | <code>delete(ids: string[]): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `search` | method | <code>search(query: VectorQuery): Promise&lt;VectorSearchResult[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `upsert` | method | <code>upsert(records: VectorRecord[]): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `VectorQuery`
+
+Vector Query interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { VectorQuery } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface VectorQuery {
+    vector: number[];
+    topK: number;
+    filter?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `filter` | property | <code>filter?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `topK` | property | <code>topK: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vector` | property | <code>vector: number[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `VectorRecord`
+
+Vector Record interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { VectorRecord } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface VectorRecord {
+    id: string;
+    vector: number[];
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vector` | property | <code>vector: number[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `VectorSearchResult`
+
+Vector Search Result interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { VectorSearchResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export interface VectorSearchResult {
+    id: string;
+    score: number;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `score` | property | <code>score: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryType`
+
+Public type alias for Memory Type; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { MemoryType } from '@codesoul-co/hypha-memory';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/index.ts)
+
+### Declaration
+
+```text
+export type MemoryType = 'working' | 'episodic' | 'semantic' | 'procedural' | 'artifact' | 'governance';
+```

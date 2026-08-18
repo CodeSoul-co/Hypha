@@ -2,9 +2,10 @@
 
 MCP integration specs, clients, policy and lifecycle management.
 
-- Package guide: [`@codesoul-co/hypha-mcp`](/packages/mcp)
 - Install: `npm install @codesoul-co/hypha-mcp@1.0.1`
+- Entrypoint import: `import { ... } from '@codesoul-co/hypha-mcp';`
 - Public exports: **122**
+- Source modules: **7**
 
 ## Export overview
 
@@ -18,23 +19,16 @@ MCP integration specs, clients, policy and lifecycle management.
 
 ## Source modules
 
-| Module | Exports | Source |
-| --- | ---: | --- |
-| [`catalog`](/api/mcp/catalog) | 24 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/catalog.ts) |
-| [`connection-manager`](/api/mcp/connection-manager) | 18 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/connection-manager.ts) |
-| [`contracts`](/api/mcp/contracts) | 25 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/contracts.ts) |
-| [`coordination`](/api/mcp/coordination) | 4 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/coordination.ts) |
-| [`governance`](/api/mcp/governance) | 11 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/governance.ts) |
-| [`index`](/api/mcp/entrypoint) | 32 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/index.ts) |
-| [`oauth`](/api/mcp/oauth) | 8 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/oauth.ts) |
+| Module | Use when | Exports | Source |
+| --- | --- | ---: | --- |
+| [`catalog`](/api/mcp/catalog) | Use the Catalog module for registering and resolving versioned capabilities or implementations. It exports 6 classes, 4 constants, 1 function, 11 interfaces, 2 types. | 24 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/catalog.ts) |
+| [`connection-manager`](/api/mcp/connection-manager) | Use the Connection manager module for using the public contracts and operations for this capability boundary. It exports 2 classes, 4 constants, 2 functions, 9 interfaces, 1 type. | 18 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/connection-manager.ts) |
+| [`contracts`](/api/mcp/contracts) | Use the Contracts module for declaring and runtime-validating contracts. It exports 14 constants, 9 interfaces, 2 types. | 25 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/contracts.ts) |
+| [`coordination`](/api/mcp/coordination) | Use the Coordination module for using the public contracts and operations for this capability boundary. It exports 1 class, 3 interfaces. | 4 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/coordination.ts) |
+| [`governance`](/api/mcp/governance) | Use the Governance module for applying policy and governance checks. It exports 1 class, 5 functions, 3 interfaces, 2 types. | 11 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/governance.ts) |
+| [`index`](/api/mcp/entrypoint) | Aggregates the public entrypoint exports for `@codesoul-co/hypha-mcp`; applications import these symbols from the package entrypoint instead of internal file paths. | 32 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/index.ts) |
+| [`oauth`](/api/mcp/oauth) | Use the Oauth module for using the public contracts and operations for this capability boundary. It exports 1 class, 2 functions, 5 interfaces. | 8 | [source](https://github.com/CodeSoul-co/Hypha/blob/main/packages/mcp/src/oauth.ts) |
 
-## Reading order
+## Import boundary
 
-Choose a source module above, then inspect its exported symbols, signatures, descriptions and public class/interface members. Every module page links back to the implementation source.
-
-## Usage conventions
-
-- Import from the package entrypoint instead of relying on unexported internal files.
-- Parse configuration, network requests and persisted data with runtime schemas.
-- Classes provide runtime behavior while specs/interfaces define cross-module contracts; do not leak provider SDK types into Core.
-- Use the [runnable examples](/guide/examples) to verify real call order.
+This page documents only the public API exported by the `@codesoul-co/hypha-mcp` package entrypoint. Implementations under `packages/mcp/src` that are not exported from that entrypoint are not part of the npm package contract.

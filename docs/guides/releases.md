@@ -28,29 +28,6 @@ or operate a Server. The complete v1.0.0 package atlas is available in the
 - A release is not public until the maintainer has published packages and created the matching Git
   tag and release notes. A version in `package.json` alone is not proof of registry availability.
 
-## Maintainer publication
-
-Run publication only from the fully validated `main` release commit after `dev` has passed every
-base release gate and has been merged into `main`. Online-provider maintainers may additionally run `npm run test:acceptance:online`,
-and infrastructure operators may run `npm run test:acceptance:manual` when those environments are
-available. Both commands fail closed when their required parameters are absent. First authenticate
-the authorized npm organization account and verify the scope:
-
-```bash
-npm whoami
-npm run release:check:npm
-npm publish packages/core --access public
-```
-
-Publish dependencies before their consumers. Continue with Storage/FSM/Inference/Models/Memory/
-Tools, then Skills/MCP, Domain/Kernel, Harness, local adapters, caches, and testing. Use npm
-provenance in the release workflow where the registry and CI identity support it. Never publish
-from any retired or unmaintained branch.
-
-After publication, create a clean temporary consumer, install exact versions from the registry,
-compile it, run its tests, and compare the package metadata with the release commit. Only then create
-the matching Git tag and public release entry.
-
 ## Consumer example
 
 [`examples/release-agent`](../../examples/release-agent/README.md) shows a product-owned Agent with

@@ -1,73 +1,210 @@
 # `@codesoul-co/hypha-core` / `contracts/execution-port`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/contracts/execution-port.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
 - Exports: **6**
+
+## Using this module
+
+Use the Execution port module for declaring and runtime-validating contracts. It exports 6 interfaces.
+
+### Import from the package entrypoint
+
+```ts
+import type {
+  ExecutionAuthorizationEvidence,
+  ExecutionAuthorizationVerificationResult,
+  ExecutionAuthorizationVerifier,
+  ExecutionDispatchRequest,
+  ExecutionOperationDispatcher,
+  ExecutionPort,
+} from '@codesoul-co/hypha-core';
+```
+
+### Usage patterns
+
+- Use the 6 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `ExecutionAuthorizationEvidence` | interface | <code>interface ExecutionAuthorizationEvidence</code> | Field contract for Execution Authorization Evidence; see all contract members below. |
-| `ExecutionAuthorizationVerificationResult` | interface | <code>interface ExecutionAuthorizationVerificationResult</code> | Field contract for Execution Authorization Verification Result; see all contract members below. |
-| `ExecutionAuthorizationVerifier` | interface | <code>interface ExecutionAuthorizationVerifier</code> | Field contract for Execution Authorization Verifier; see all contract members below. |
-| `ExecutionDispatchRequest` | interface | <code>interface ExecutionDispatchRequest</code> | Field contract for Execution Dispatch Request; see all contract members below. |
-| `ExecutionOperationDispatcher` | interface | <code>interface ExecutionOperationDispatcher</code> | Field contract for Execution Operation Dispatcher; see all contract members below. |
-| `ExecutionPort` | interface | <code>interface ExecutionPort</code> | Field contract for Execution Port; see all contract members below. |
+| `ExecutionAuthorizationEvidence` | interface | <code>interface ExecutionAuthorizationEvidence</code> | Execution Authorization Evidence interface with 14 public fields or methods. |
+| `ExecutionAuthorizationVerificationResult` | interface | <code>interface ExecutionAuthorizationVerificationResult</code> | Execution Authorization Verification Result interface with 5 public fields or methods. |
+| `ExecutionAuthorizationVerifier` | interface | <code>interface ExecutionAuthorizationVerifier</code> | Execution Authorization Verifier interface with 1 public fields or methods. |
+| `ExecutionDispatchRequest` | interface | <code>interface ExecutionDispatchRequest</code> | Execution Dispatch Request interface with 4 public fields or methods. |
+| `ExecutionOperationDispatcher` | interface | <code>interface ExecutionOperationDispatcher</code> | Execution Operation Dispatcher interface with 1 public fields or methods. |
+| `ExecutionPort` | interface | <code>interface ExecutionPort</code> | Execution Port interface with 1 public fields or methods. |
 
-## `ExecutionAuthorizationEvidence` contract members
+## `ExecutionAuthorizationEvidence`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `activityId` | property | <code>activityId: string</code> | Public activity Id property. |
-| `approvalRef` | property | <code>approvalRef: string</code> | Public approval Ref property. |
-| `authorizedAt` | property | <code>authorizedAt: string</code> | Public authorized At property. |
-| `contractSnapshotRef` | property | <code>contractSnapshotRef: string</code> | Public contract Snapshot Ref property. |
-| `expiresAt` | property | <code>expiresAt: string</code> | Public expires At property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `inputHash` | property | <code>inputHash: string</code> | Public input Hash property. |
-| `invocationId` | property | <code>invocationId: string</code> | Public invocation Id property. |
-| `policyDecisionRef` | property | <code>policyDecisionRef: string</code> | Public policy Decision Ref property. |
-| `principalId` | property | <code>principalId: string</code> | Public principal Id property. |
-| `riskAssessmentId` | property | <code>riskAssessmentId: string</code> | Public risk Assessment Id property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `toolId` | property | <code>toolId: string</code> | Public tool Id property. |
-| `toolRevision` | property | <code>toolRevision: string</code> | Public tool Revision property. |
+Execution Authorization Evidence interface with 14 public fields or methods.
 
-## `ExecutionAuthorizationVerificationResult` contract members
+- Kind: interface
+- Import: `import type { ExecutionAuthorizationEvidence } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-port`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `expiresAt` | property | <code>expiresAt: string</code> | Public expires At property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `valid` | property | <code>valid: boolean</code> | Public valid property. |
-| `verificationRef` | property | <code>verificationRef: string</code> | Public verification Ref property. |
-| `verifiedAt` | property | <code>verifiedAt: string</code> | Public verified At property. |
+### Declaration
 
-## `ExecutionAuthorizationVerifier` contract members
+```text
+export interface ExecutionAuthorizationEvidence {
+    id: string;
+    invocationId: string;
+    activityId: string;
+    runId: string;
+    toolId: string;
+    toolRevision?: string;
+    contractSnapshotRef?: string;
+    principalId: string;
+    inputHash: string;
+    policyDecisionRef: string;
+    riskAssessmentId: string;
+    approvalRef?: string;
+    authorizedAt: string;
+    expiresAt?: string;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `verify` | method | <code>verify(request: ExecutionDispatchRequest, abortSignal: AbortSignal): Promise&lt;ExecutionAuthorizationVerificationResult&gt;</code> | Public runtime operation for verify. |
-
-## `ExecutionDispatchRequest` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `activity` | property | <code>activity: ExecutionActivityRequest</code> | Public activity property. |
-| `authorization` | property | <code>authorization: ExecutionAuthorizationEvidence</code> | Public authorization property. |
-| `binding` | property | <code>binding: ExecutionToolBinding</code> | Public binding property. |
-| `riskAssessment` | property | <code>riskAssessment: ExecutionRiskAssessment</code> | Public risk Assessment property. |
+| `activityId` | property | <code>activityId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `approvalRef` | property | <code>approvalRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `authorizedAt` | property | <code>authorizedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contractSnapshotRef` | property | <code>contractSnapshotRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expiresAt` | property | <code>expiresAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `inputHash` | property | <code>inputHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `invocationId` | property | <code>invocationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `policyDecisionRef` | property | <code>policyDecisionRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principalId` | property | <code>principalId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `riskAssessmentId` | property | <code>riskAssessmentId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolId` | property | <code>toolId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolRevision` | property | <code>toolRevision?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionOperationDispatcher` contract members
+## `ExecutionAuthorizationVerificationResult`
+
+Execution Authorization Verification Result interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionAuthorizationVerificationResult } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-port`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
+
+### Declaration
+
+```text
+export interface ExecutionAuthorizationVerificationResult {
+    valid: boolean;
+    verificationRef: string;
+    verifiedAt: string;
+    expiresAt?: string;
+    reason?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `dispatch` | method | <code>dispatch(request: ExecutionActivityRequest, abortSignal: AbortSignal): Promise&lt;ExecutionActivityResult&gt;</code> | Public runtime operation for dispatch. |
+| `expiresAt` | property | <code>expiresAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `valid` | property | <code>valid: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `verificationRef` | property | <code>verificationRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `verifiedAt` | property | <code>verifiedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ExecutionPort` contract members
+## `ExecutionAuthorizationVerifier`
+
+Execution Authorization Verifier interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionAuthorizationVerifier } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-port`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
+
+### Declaration
+
+```text
+export interface ExecutionAuthorizationVerifier {
+    verify(request: ExecutionDispatchRequest, abortSignal: AbortSignal): Promise<ExecutionAuthorizationVerificationResult>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `execute` | method | <code>execute(request: ExecutionDispatchRequest, abortSignal: AbortSignal): Promise&lt;ExecutionActivityResult&gt;</code> | Public runtime operation for execute. |
+| `verify` | method | <code>verify(request: ExecutionDispatchRequest, abortSignal: AbortSignal): Promise&lt;ExecutionAuthorizationVerificationResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ExecutionDispatchRequest`
+
+Execution Dispatch Request interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionDispatchRequest } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-port`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
+
+### Declaration
+
+```text
+export interface ExecutionDispatchRequest {
+    activity: ExecutionActivityRequest;
+    binding: ExecutionToolBinding;
+    riskAssessment: ExecutionRiskAssessment;
+    authorization: ExecutionAuthorizationEvidence;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `activity` | property | <code>activity: ExecutionActivityRequest</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `authorization` | property | <code>authorization: ExecutionAuthorizationEvidence</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `binding` | property | <code>binding: ExecutionToolBinding</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `riskAssessment` | property | <code>riskAssessment: ExecutionRiskAssessment</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ExecutionOperationDispatcher`
+
+Execution Operation Dispatcher interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionOperationDispatcher } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-port`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
+
+### Declaration
+
+```text
+export interface ExecutionOperationDispatcher {
+    dispatch(request: ExecutionActivityRequest, abortSignal: AbortSignal): Promise<ExecutionActivityResult>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `dispatch` | method | <code>dispatch(request: ExecutionActivityRequest, abortSignal: AbortSignal): Promise&lt;ExecutionActivityResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ExecutionPort`
+
+Execution Port interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ExecutionPort } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/execution-port`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/execution-port.ts)
+
+### Declaration
+
+```text
+export interface ExecutionPort {
+    execute(request: ExecutionDispatchRequest, abortSignal: AbortSignal): Promise<ExecutionActivityResult>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `execute` | method | <code>execute(request: ExecutionDispatchRequest, abortSignal: AbortSignal): Promise&lt;ExecutionActivityResult&gt;</code> | Public method; parameters and return type are shown in the signature. |

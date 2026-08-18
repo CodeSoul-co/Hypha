@@ -1,142 +1,364 @@
 # `@codesoul-co/hypha-core` / `contracts/command-execution`
 
 - 包索引: [`@codesoul-co/hypha-core`](/zh/api/core)
-- 模块指南: [学习与组合说明](/zh/packages/core)
 - 源码: [`packages/core/src/contracts/command-execution.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
 - 导出数: **7**
+
+## 模块用法
+
+用于声明并运行时校验契约。Command execution 模块公开 6 接口、1 类型。
+
+### 从包入口导入
+
+```ts
+import type {
+  CommandExecutionRequest,
+  CommandExecutionResult,
+  CommandOutputChunk,
+  ExecutionCancelRequest,
+  ExecutionReceipt,
+  ExecutionResourceUsage,
+  CommandExecutionStatus,
+} from '@codesoul-co/hypha-core';
+```
+
+### 使用要点
+
+- 7 个类型/接口用于应用代码、Adapter 或测试中的静态契约；请使用 `import type`，运行时不应依赖它们。
+
 
 ## 公共导出
 
 | Symbol | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `CommandExecutionRequest` | 接口 | <code>interface CommandExecutionRequest</code> | Command Execution Request 的字段契约；完整字段见下表。 |
-| `CommandExecutionResult` | 接口 | <code>interface CommandExecutionResult</code> | Command Execution Result 的字段契约；完整字段见下表。 |
-| `CommandOutputChunk` | 接口 | <code>interface CommandOutputChunk</code> | Command Output Chunk 的字段契约；完整字段见下表。 |
-| `ExecutionCancelRequest` | 接口 | <code>interface ExecutionCancelRequest</code> | Execution Cancel Request 的字段契约；完整字段见下表。 |
-| `ExecutionReceipt` | 接口 | <code>interface ExecutionReceipt</code> | Execution Receipt 的字段契约；完整字段见下表。 |
-| `ExecutionResourceUsage` | 接口 | <code>interface ExecutionResourceUsage</code> | Execution Resource Usage 的字段契约；完整字段见下表。 |
-| `CommandExecutionStatus` | 类型 | <code>type CommandExecutionStatus = 'queued' &#124; 'starting' &#124; 'running' &#124; 'cancelling' &#124; 'cancelled' &#124; 'completed' &#124; 'failed' &#124; 'timed_out' &#124; 'oom_killed' &#124; 'resource_exceeded' &#124; 'quarantined'</code> | Command Execution Status 的公共类型别名。 |
+| `CommandExecutionRequest` | 接口 | <code>interface CommandExecutionRequest</code> | Command Execution Request 接口，共包含 35 个公开字段或方法。 |
+| `CommandExecutionResult` | 接口 | <code>interface CommandExecutionResult</code> | Command Execution Result 接口，共包含 25 个公开字段或方法。 |
+| `CommandOutputChunk` | 接口 | <code>interface CommandOutputChunk</code> | Command Output Chunk 接口，共包含 9 个公开字段或方法。 |
+| `ExecutionCancelRequest` | 接口 | <code>interface ExecutionCancelRequest</code> | Execution Cancel Request 接口，共包含 9 个公开字段或方法。 |
+| `ExecutionReceipt` | 接口 | <code>interface ExecutionReceipt</code> | Execution Receipt 接口，共包含 8 个公开字段或方法。 |
+| `ExecutionResourceUsage` | 接口 | <code>interface ExecutionResourceUsage</code> | Execution Resource Usage 接口，共包含 8 个公开字段或方法。 |
+| `CommandExecutionStatus` | 类型 | <code>type CommandExecutionStatus = 'queued' &#124; 'starting' &#124; 'running' &#124; 'cancelling' &#124; 'cancelled' &#124; 'completed' &#124; 'failed' &#124; 'timed_out' &#124; 'oom_killed' &#124; 'resource_exceeded' &#124; 'quarantined'</code> | Command Execution Status 公共类型别名；完整类型表达式见声明。 |
 
-## `CommandExecutionRequest` 契约字段
+## `CommandExecutionRequest`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `agentId` | 属性 | <code>agentId: string</code> | agent Id 字段。 |
-| `args` | 属性 | <code>args: string[]</code> | args 字段。 |
-| `captureArtifacts` | 属性 | <code>captureArtifacts: boolean</code> | capture Artifacts 字段。 |
-| `captureFileMutations` | 属性 | <code>captureFileMutations: boolean</code> | capture File Mutations 字段。 |
-| `causationId` | 属性 | <code>causationId: string</code> | causation Id 字段。 |
-| `correlationId` | 属性 | <code>correlationId: string</code> | correlation Id 字段。 |
-| `cwd` | 属性 | <code>cwd: string</code> | cwd 字段。 |
-| `env` | 属性 | <code>env: Record&lt;string, string&gt;</code> | env 字段。 |
-| `environmentRef` | 属性 | <code>environmentRef: SpecRef</code> | environment Ref 字段。 |
-| `executable` | 属性 | <code>executable: string</code> | executable 字段。 |
-| `executionId` | 属性 | <code>executionId: string</code> | execution Id 字段。 |
-| `expectedWorkspaceSnapshotHash` | 属性 | <code>expectedWorkspaceSnapshotHash: string</code> | expected Workspace Snapshot Hash 字段。 |
-| `fsmState` | 属性 | <code>fsmState: string</code> | fsm State 字段。 |
-| `idempotencyKey` | 属性 | <code>idempotencyKey: string</code> | idempotency Key 字段。 |
-| `idleTimeoutMs` | 属性 | <code>idleTimeoutMs: number</code> | idle Timeout Ms 字段。 |
-| `maxStderrBytes` | 属性 | <code>maxStderrBytes: number</code> | max Stderr Bytes 字段。 |
-| `maxStdoutBytes` | 属性 | <code>maxStdoutBytes: number</code> | max Stdout Bytes 字段。 |
-| `metadata` | 属性 | <code>metadata: Record&lt;string, unknown&gt;</code> | metadata 字段。 |
-| `networkAuthorizationRef` | 属性 | <code>networkAuthorizationRef: string</code> | network Authorization Ref 字段。 |
-| `operationId` | 属性 | <code>operationId: string</code> | operation Id 字段。 |
-| `principal` | 属性 | <code>principal: ExecutionPrincipal</code> | principal 字段。 |
-| `runId` | 属性 | <code>runId: string</code> | run Id 字段。 |
-| `sandboxId` | 属性 | <code>sandboxId: string</code> | sandbox Id 字段。 |
-| `secretRefs` | 属性 | <code>secretRefs: string[]</code> | secret Refs 字段。 |
-| `sessionId` | 属性 | <code>sessionId: string</code> | session Id 字段。 |
-| `shell` | 属性 | <code>shell: boolean</code> | shell 字段。 |
-| `snapshotAfter` | 属性 | <code>snapshotAfter: boolean</code> | snapshot After 字段。 |
-| `snapshotBefore` | 属性 | <code>snapshotBefore: boolean</code> | snapshot Before 字段。 |
-| `snapshotOnFailure` | 属性 | <code>snapshotOnFailure: boolean</code> | snapshot On Failure 字段。 |
-| `stdin` | 属性 | <code>stdin: string &#124; Uint8Array&lt;ArrayBufferLike&gt;</code> | stdin 字段。 |
-| `stepId` | 属性 | <code>stepId: string</code> | step Id 字段。 |
-| `tenantId` | 属性 | <code>tenantId: string</code> | tenant Id 字段。 |
-| `timeoutMs` | 属性 | <code>timeoutMs: number</code> | timeout Ms 字段。 |
-| `userId` | 属性 | <code>userId: string</code> | user Id 字段。 |
-| `workspaceId` | 属性 | <code>workspaceId: string</code> | workspace Id 字段。 |
+Command Execution Request 接口，共包含 35 个公开字段或方法。
 
-## `CommandExecutionResult` 契约字段
+- 种类: 接口
+- 导入: `import type { CommandExecutionRequest } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `changedFiles` | 属性 | <code>changedFiles: FileMutation[]</code> | changed Files 字段。 |
-| `completedAt` | 属性 | <code>completedAt: string</code> | completed At 字段。 |
-| `error` | 属性 | <code>error: NormalizedExecutionError</code> | error 字段。 |
-| `executionId` | 属性 | <code>executionId: string</code> | execution Id 字段。 |
-| `exitCode` | 属性 | <code>exitCode: number</code> | exit Code 字段。 |
-| `externalReceipt` | 属性 | <code>externalReceipt: ExecutionReceipt</code> | external Receipt 字段。 |
-| `generatedArtifactRefs` | 属性 | <code>generatedArtifactRefs: string[]</code> | generated Artifact Refs 字段。 |
-| `latencyMs` | 属性 | <code>latencyMs: number</code> | latency Ms 字段。 |
-| `metadata` | 属性 | <code>metadata: Record&lt;string, unknown&gt;</code> | metadata 字段。 |
-| `resourceUsage` | 属性 | <code>resourceUsage: ExecutionResourceUsage</code> | resource Usage 字段。 |
-| `revision` | 属性 | <code>revision: number</code> | revision 字段。 |
-| `sandboxId` | 属性 | <code>sandboxId: string</code> | sandbox Id 字段。 |
-| `signal` | 属性 | <code>signal: string</code> | signal 字段。 |
-| `snapshotAfterRef` | 属性 | <code>snapshotAfterRef: string</code> | snapshot After Ref 字段。 |
-| `snapshotBeforeRef` | 属性 | <code>snapshotBeforeRef: string</code> | snapshot Before Ref 字段。 |
-| `startedAt` | 属性 | <code>startedAt: string</code> | started At 字段。 |
-| `status` | 属性 | <code>status: CommandExecutionStatus</code> | status 字段。 |
-| `stderr` | 属性 | <code>stderr: string</code> | stderr 字段。 |
-| `stderrArtifactRef` | 属性 | <code>stderrArtifactRef: string</code> | stderr Artifact Ref 字段。 |
-| `stderrContentHash` | 属性 | <code>stderrContentHash: string</code> | SHA-256 content hash of the bounded inline stderr value. |
-| `stderrTruncated` | 属性 | <code>stderrTruncated: boolean</code> | stderr Truncated 字段。 |
-| `stdout` | 属性 | <code>stdout: string</code> | stdout 字段。 |
-| `stdoutArtifactRef` | 属性 | <code>stdoutArtifactRef: string</code> | stdout Artifact Ref 字段。 |
-| `stdoutContentHash` | 属性 | <code>stdoutContentHash: string</code> | SHA-256 content hash of the bounded inline stdout value. |
-| `stdoutTruncated` | 属性 | <code>stdoutTruncated: boolean</code> | stdout Truncated 字段。 |
+### 声明
 
-## `CommandOutputChunk` 契约字段
+```text
+export interface CommandExecutionRequest {
+    executionId?: string;
+    operationId: string;
+    principal: ExecutionPrincipal;
+    tenantId?: string;
+    userId: string;
+    workspaceId: string;
+    sessionId?: string;
+    runId: string;
+    stepId?: string;
+    agentId?: string;
+    fsmState?: string;
+    sandboxId?: string;
+    environmentRef: SpecRef;
+    executable: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+    secretRefs?: string[];
+    shell?: boolean;
+    stdin?: string | Uint8Array;
+    timeoutMs?: number;
+    idleTimeoutMs?: number;
+    maxStdoutBytes?: number;
+    maxStderrBytes?: number;
+    captureArtifacts?: boolean;
+    captureFileMutations?: boolean;
+    snapshotBefore?: boolean;
+    snapshotAfter?: boolean;
+    snapshotOnFailure?: boolean;
+    networkAuthorizationRef?: string;
+    idempotencyKey?: string;
+    expectedWorkspaceSnapshotHash?: string;
+    correlationId?: string;
+    causationId?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `byteLength` | 属性 | <code>byteLength: number</code> | byte Length 字段。 |
-| `content` | 属性 | <code>content: string</code> | content 字段。 |
-| `contentHash` | 属性 | <code>contentHash: string</code> | content Hash 字段。 |
-| `emittedAt` | 属性 | <code>emittedAt: string</code> | emitted At 字段。 |
-| `encoding` | 属性 | <code>encoding: "utf8" &#124; "base64"</code> | encoding 字段。 |
-| `executionId` | 属性 | <code>executionId: string</code> | execution Id 字段。 |
-| `sequence` | 属性 | <code>sequence: number</code> | sequence 字段。 |
-| `stream` | 属性 | <code>stream: "stdout" &#124; "stderr"</code> | stream 字段。 |
-| `truncated` | 属性 | <code>truncated: boolean</code> | truncated 字段。 |
+| `agentId` | 属性 | <code>agentId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `args` | 属性 | <code>args?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `captureArtifacts` | 属性 | <code>captureArtifacts?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `captureFileMutations` | 属性 | <code>captureFileMutations?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `causationId` | 属性 | <code>causationId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `correlationId` | 属性 | <code>correlationId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `cwd` | 属性 | <code>cwd?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `env` | 属性 | <code>env?: Record&lt;string, string&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `environmentRef` | 属性 | <code>environmentRef: SpecRef</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `executable` | 属性 | <code>executable: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `executionId` | 属性 | <code>executionId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `expectedWorkspaceSnapshotHash` | 属性 | <code>expectedWorkspaceSnapshotHash?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `fsmState` | 属性 | <code>fsmState?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `idempotencyKey` | 属性 | <code>idempotencyKey?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `idleTimeoutMs` | 属性 | <code>idleTimeoutMs?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxStderrBytes` | 属性 | <code>maxStderrBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxStdoutBytes` | 属性 | <code>maxStdoutBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `metadata` | 属性 | <code>metadata?: Record&lt;string, unknown&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `networkAuthorizationRef` | 属性 | <code>networkAuthorizationRef?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `operationId` | 属性 | <code>operationId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `principal` | 属性 | <code>principal: ExecutionPrincipal</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `runId` | 属性 | <code>runId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `sandboxId` | 属性 | <code>sandboxId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `secretRefs` | 属性 | <code>secretRefs?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `sessionId` | 属性 | <code>sessionId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `shell` | 属性 | <code>shell?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `snapshotAfter` | 属性 | <code>snapshotAfter?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `snapshotBefore` | 属性 | <code>snapshotBefore?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `snapshotOnFailure` | 属性 | <code>snapshotOnFailure?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stdin` | 属性 | <code>stdin?: string &#124; Uint8Array&lt;ArrayBufferLike&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stepId` | 属性 | <code>stepId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `tenantId` | 属性 | <code>tenantId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `timeoutMs` | 属性 | <code>timeoutMs?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `userId` | 属性 | <code>userId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `workspaceId` | 属性 | <code>workspaceId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `ExecutionCancelRequest` 契约字段
+## `CommandExecutionResult`
+
+Command Execution Result 接口，共包含 25 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { CommandExecutionResult } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
+
+### 声明
+
+```text
+export interface CommandExecutionResult {
+    executionId: string;
+    revision: number;
+    sandboxId: string;
+    status: CommandExecutionStatus;
+    exitCode: number | null;
+    signal?: string;
+    stdout?: string;
+    stderr?: string;
+    /** SHA-256 content hash of the bounded inline stdout value. */
+    stdoutContentHash?: string;
+    /** SHA-256 content hash of the bounded inline stderr value. */
+    stderrContentHash?: string;
+    stdoutTruncated?: boolean;
+    stderrTruncated?: boolean;
+    stdoutArtifactRef?: string;
+    stderrArtifactRef?: string;
+    changedFiles: FileMutation[];
+    generatedArtifactRefs: string[];
+    snapshotBeforeRef?: string;
+    snapshotAfterRef?: string;
+    resourceUsage?: ExecutionResourceUsage;
+    externalReceipt?: ExecutionReceipt;
+    startedAt: string;
+    completedAt?: string;
+    latencyMs?: number;
+    error?: NormalizedExecutionError;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `causationId` | 属性 | <code>causationId: string</code> | causation Id 字段。 |
-| `correlationId` | 属性 | <code>correlationId: string</code> | correlation Id 字段。 |
-| `executionId` | 属性 | <code>executionId: string</code> | execution Id 字段。 |
-| `expectedRevision` | 属性 | <code>expectedRevision: number</code> | expected Revision 字段。 |
-| `gracePeriodMs` | 属性 | <code>gracePeriodMs: number</code> | grace Period Ms 字段。 |
-| `idempotencyKey` | 属性 | <code>idempotencyKey: string</code> | idempotency Key 字段。 |
-| `operationId` | 属性 | <code>operationId: string</code> | operation Id 字段。 |
-| `principal` | 属性 | <code>principal: ExecutionPrincipal</code> | principal 字段。 |
-| `reason` | 属性 | <code>reason: string</code> | reason 字段。 |
+| `changedFiles` | 属性 | <code>changedFiles: FileMutation[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `completedAt` | 属性 | <code>completedAt?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `error` | 属性 | <code>error?: NormalizedExecutionError</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `executionId` | 属性 | <code>executionId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `exitCode` | 属性 | <code>exitCode: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `externalReceipt` | 属性 | <code>externalReceipt?: ExecutionReceipt</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `generatedArtifactRefs` | 属性 | <code>generatedArtifactRefs: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `latencyMs` | 属性 | <code>latencyMs?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `metadata` | 属性 | <code>metadata?: Record&lt;string, unknown&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `resourceUsage` | 属性 | <code>resourceUsage?: ExecutionResourceUsage</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `revision` | 属性 | <code>revision: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `sandboxId` | 属性 | <code>sandboxId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `signal` | 属性 | <code>signal?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `snapshotAfterRef` | 属性 | <code>snapshotAfterRef?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `snapshotBeforeRef` | 属性 | <code>snapshotBeforeRef?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `startedAt` | 属性 | <code>startedAt: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `status` | 属性 | <code>status: CommandExecutionStatus</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stderr` | 属性 | <code>stderr?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stderrArtifactRef` | 属性 | <code>stderrArtifactRef?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stderrContentHash` | 属性 | <code>stderrContentHash?: string</code> | SHA-256 content hash of the bounded inline stderr value. |
+| `stderrTruncated` | 属性 | <code>stderrTruncated?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stdout` | 属性 | <code>stdout?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stdoutArtifactRef` | 属性 | <code>stdoutArtifactRef?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stdoutContentHash` | 属性 | <code>stdoutContentHash?: string</code> | SHA-256 content hash of the bounded inline stdout value. |
+| `stdoutTruncated` | 属性 | <code>stdoutTruncated?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `ExecutionReceipt` 契约字段
+## `CommandOutputChunk`
+
+Command Output Chunk 接口，共包含 9 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { CommandOutputChunk } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
+
+### 声明
+
+```text
+export interface CommandOutputChunk {
+    executionId: string;
+    sequence: number;
+    stream: 'stdout' | 'stderr';
+    encoding: 'utf8' | 'base64';
+    content: string;
+    byteLength: number;
+    contentHash: string;
+    emittedAt: string;
+    truncated?: boolean;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `executionId` | 属性 | <code>executionId: string</code> | execution Id 字段。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `issuedAt` | 属性 | <code>issuedAt: string</code> | issued At 字段。 |
-| `metadata` | 属性 | <code>metadata: Record&lt;string, unknown&gt;</code> | metadata 字段。 |
-| `providerExecutionRef` | 属性 | <code>providerExecutionRef: string</code> | provider Execution Ref 字段。 |
-| `providerId` | 属性 | <code>providerId: string</code> | provider Id 字段。 |
-| `receiptHash` | 属性 | <code>receiptHash: string</code> | receipt Hash 字段。 |
-| `status` | 属性 | <code>status: "unknown" &#124; "accepted" &#124; "completed" &#124; "rejected"</code> | status 字段。 |
+| `byteLength` | 属性 | <code>byteLength: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `content` | 属性 | <code>content: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `contentHash` | 属性 | <code>contentHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `emittedAt` | 属性 | <code>emittedAt: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `encoding` | 属性 | <code>encoding: "utf8" &#124; "base64"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `executionId` | 属性 | <code>executionId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `sequence` | 属性 | <code>sequence: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stream` | 属性 | <code>stream: "stdout" &#124; "stderr"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `truncated` | 属性 | <code>truncated?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `ExecutionResourceUsage` 契约字段
+## `ExecutionCancelRequest`
+
+Execution Cancel Request 接口，共包含 9 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { ExecutionCancelRequest } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
+
+### 声明
+
+```text
+export interface ExecutionCancelRequest {
+    operationId: string;
+    executionId: string;
+    principal: ExecutionPrincipal;
+    expectedRevision: number;
+    reason?: string;
+    gracePeriodMs?: number;
+    idempotencyKey?: string;
+    correlationId?: string;
+    causationId?: string;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `cpuTimeMs` | 属性 | <code>cpuTimeMs: number</code> | cpu Time Ms 字段。 |
-| `networkBytesReceived` | 属性 | <code>networkBytesReceived: number</code> | network Bytes Received 字段。 |
-| `networkBytesSent` | 属性 | <code>networkBytesSent: number</code> | network Bytes Sent 字段。 |
-| `outputBytes` | 属性 | <code>outputBytes: number</code> | output Bytes 字段。 |
-| `peakMemoryBytes` | 属性 | <code>peakMemoryBytes: number</code> | peak Memory Bytes 字段。 |
-| `processCountPeak` | 属性 | <code>processCountPeak: number</code> | process Count Peak 字段。 |
-| `readBytes` | 属性 | <code>readBytes: number</code> | read Bytes 字段。 |
-| `writtenBytes` | 属性 | <code>writtenBytes: number</code> | written Bytes 字段。 |
+| `causationId` | 属性 | <code>causationId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `correlationId` | 属性 | <code>correlationId?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `executionId` | 属性 | <code>executionId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `expectedRevision` | 属性 | <code>expectedRevision: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `gracePeriodMs` | 属性 | <code>gracePeriodMs?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `idempotencyKey` | 属性 | <code>idempotencyKey?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `operationId` | 属性 | <code>operationId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `principal` | 属性 | <code>principal: ExecutionPrincipal</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `reason` | 属性 | <code>reason?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `ExecutionReceipt`
+
+Execution Receipt 接口，共包含 8 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { ExecutionReceipt } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
+
+### 声明
+
+```text
+export interface ExecutionReceipt {
+    id: string;
+    providerId: string;
+    executionId: string;
+    providerExecutionRef?: string;
+    status: 'accepted' | 'completed' | 'rejected' | 'unknown';
+    issuedAt: string;
+    receiptHash: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `executionId` | 属性 | <code>executionId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `id` | 属性 | <code>id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `issuedAt` | 属性 | <code>issuedAt: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `metadata` | 属性 | <code>metadata?: Record&lt;string, unknown&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerExecutionRef` | 属性 | <code>providerExecutionRef?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `providerId` | 属性 | <code>providerId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `receiptHash` | 属性 | <code>receiptHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `status` | 属性 | <code>status: "unknown" &#124; "accepted" &#124; "completed" &#124; "rejected"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `ExecutionResourceUsage`
+
+Execution Resource Usage 接口，共包含 8 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { ExecutionResourceUsage } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
+
+### 声明
+
+```text
+export interface ExecutionResourceUsage {
+    cpuTimeMs?: number;
+    peakMemoryBytes?: number;
+    readBytes?: number;
+    writtenBytes?: number;
+    networkBytesSent?: number;
+    networkBytesReceived?: number;
+    processCountPeak?: number;
+    outputBytes?: number;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `cpuTimeMs` | 属性 | <code>cpuTimeMs?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `networkBytesReceived` | 属性 | <code>networkBytesReceived?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `networkBytesSent` | 属性 | <code>networkBytesSent?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `outputBytes` | 属性 | <code>outputBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `peakMemoryBytes` | 属性 | <code>peakMemoryBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `processCountPeak` | 属性 | <code>processCountPeak?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `readBytes` | 属性 | <code>readBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `writtenBytes` | 属性 | <code>writtenBytes?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `CommandExecutionStatus`
+
+Command Execution Status 公共类型别名；完整类型表达式见声明。
+
+- 种类: 类型
+- 导入: `import type { CommandExecutionStatus } from '@codesoul-co/hypha-core';`
+- 源码模块: [`contracts/command-execution`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/command-execution.ts)
+
+### 声明
+
+```text
+export type CommandExecutionStatus = 'queued' | 'starting' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'timed_out' | 'oom_killed' | 'resource_exceeded' | 'quarantined';
+```

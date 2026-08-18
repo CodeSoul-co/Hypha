@@ -22,26 +22,25 @@ npm install \
 
 创建 `agent/` 目录：
 
-| 文件 | 职责 |
-| --- | --- |
+| 文件               | 职责                                                                 |
+| ------------------ | -------------------------------------------------------------------- |
 | `domain-pack.yaml` | Task/Output Schema、Workflow、Allow-list、Profile、Policy 与 Fixture |
-| `prompt.json` | 版本化 Prompt 注册请求 |
-| `skill.md` | 渐进加载的指令资产与 Trust Metadata |
-| `hypha.user.yaml` | 部署拥有的 Server Overlay；不能提交 Secret |
+| `prompt.json`      | 版本化 Prompt 注册请求                                               |
+| `skill.md`         | 渐进加载的指令资产与 Trust Metadata                                  |
+| `hypha.user.yaml`  | 部署拥有的 Server Overlay；不能提交 Secret                           |
 
 具体业务的 Workflow、Prompt 与 Schema 都属于这里，不能进入 Core、Kernel 或 Harness。
 
 ## 3. 先编译，再绑定 Provider
 
 ```ts
-import {
-  compileDomainPackToHarnessedSystem, loadDomainPackFile,
-} from '@codesoul-co/hypha-domain';
+import { compileDomainPackToHarnessedSystem, loadDomainPackFile } from '@codesoul-co/hypha-domain';
 
 const pack = await loadDomainPackFile('./agent/domain-pack.yaml');
 const system = compileDomainPackToHarnessedSystem(pack, {
   agentRef: { id: 'agent.example', version: '1.0.0' },
-  taskSchemaId: 'task.example', workflowId: 'workflow.example',
+  taskSchemaId: 'task.example',
+  workflowId: 'workflow.example',
   agentToolRefs: ['search'],
   agentSkillRefs: [{ id: 'skill.example', version: '1.0.0' }],
 });
@@ -64,5 +63,3 @@ npm test
 ```
 
 至少应测试确定性编译、能力 ID、Output Schema、FSM 拓扑、Event Scope 与 Replay 后的状态。
-
-接下来可以阅读[系统架构](/zh/guide/architecture)、[完整组合](/zh/guide/full-system)与[可运行示例](/zh/guide/examples)。

@@ -1,39 +1,225 @@
 # `@codesoul-co/hypha-adapters-local` / `artifact-content-io`
 
 - 包索引: [`@codesoul-co/hypha-adapters-local`](/zh/api/adapters-local)
-- 模块指南: [学习与组合说明](/zh/packages/adapters-local)
 - 源码: [`packages/adapters-local/src/artifact-content-io.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
 - 导出数: **6**
+
+## 模块用法
+
+用于使用该功能边界的公共契约与操作。Artifact content io 模块公开 1 类、4 函数、1 接口。
+
+### 从包入口导入
+
+```ts
+import {
+  ArtifactContentLimitError,
+  collectArtifactContent,
+  hashArtifactBytes,
+  readArtifactStream,
+  streamArtifactBytes,
+} from '@codesoul-co/hypha-adapters-local';
+
+import type {
+  CollectedArtifactContent,
+} from '@codesoul-co/hypha-adapters-local';
+```
+
+### 使用要点
+
+- 1 个类型/接口用于应用代码、Adapter 或测试中的静态契约；请使用 `import type`，运行时不应依赖它们。
+- 1 个类提供可实例化的运行时实现；构造参数与公开方法在各自条目中完整列出。
+- 4 个函数是该模块的直接操作入口；每个 overload 的必需/可选参数与返回类型均在下方列出。
+
 
 ## 公共导出
 
 | Symbol | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `ArtifactContentLimitError` | 类 | <code>new ArtifactContentLimitError(maxBytes: number, observedBytes: number): ArtifactContentLimitError</code> | Artifact Content Limit Error 的运行时实现；公开构造函数与成员见下表。 |
-| `collectArtifactContent` | 函数 | <code>collectArtifactContent(source: ArtifactByteSource, maxBytes: number): Promise&lt;CollectedArtifactContent&gt;</code> | collect Artifact Content 的公开运行时操作。 |
-| `hashArtifactBytes` | 函数 | <code>hashArtifactBytes(bytes: Uint8Array): string</code> | 判断是否存在 h Artifact Bytes。 |
-| `readArtifactStream` | 函数 | <code>readArtifactStream(stream: AsyncIterable&lt;Uint8Array&gt;): Promise&lt;Uint8Array&gt;</code> | read Artifact Stream 的公开运行时操作。 |
-| `streamArtifactBytes` | 函数 | <code>streamArtifactBytes(bytes: Uint8Array): AsyncIterable&lt;Uint8Array&gt;</code> | stream Artifact Bytes 的公开运行时操作。 |
-| `CollectedArtifactContent` | 接口 | <code>interface CollectedArtifactContent</code> | Collected Artifact Content 的字段契约；完整字段见下表。 |
+| `ArtifactContentLimitError` | 类 | <code>new ArtifactContentLimitError(maxBytes: number, observedBytes: number): ArtifactContentLimitError</code> | Artifact Content Limit Error 类，共公开 10 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `collectArtifactContent` | 函数 | <code>collectArtifactContent(source: ArtifactByteSource, maxBytes: number): Promise&lt;CollectedArtifactContent&gt;</code> | Collect Artifact Content 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `hashArtifactBytes` | 函数 | <code>hashArtifactBytes(bytes: Uint8Array): string</code> | Hash Artifact Bytes 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `readArtifactStream` | 函数 | <code>readArtifactStream(stream: AsyncIterable&lt;Uint8Array&gt;): Promise&lt;Uint8Array&gt;</code> | Read Artifact Stream 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `streamArtifactBytes` | 函数 | <code>streamArtifactBytes(bytes: Uint8Array): AsyncIterable&lt;Uint8Array&gt;</code> | Stream Artifact Bytes 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `CollectedArtifactContent` | 接口 | <code>interface CollectedArtifactContent</code> | Collected Artifact Content 接口，共包含 2 个公开字段或方法。 |
 
-## `ArtifactContentLimitError` 公开成员
+## `ArtifactContentLimitError`
+
+Artifact Content Limit Error 类，共公开 10 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { ArtifactContentLimitError } from '@codesoul-co/hypha-adapters-local';`
+- 源码模块: [`artifact-content-io`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
+
+### 声明
+
+```text
+export declare class ArtifactContentLimitError extends Error {
+    readonly maxBytes: number;
+    readonly observedBytes: number;
+    constructor(maxBytes: number, observedBytes: number);
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `cause` | 属性 | <code>cause: unknown</code> | cause 字段。 |
+| `cause` | 属性 | <code>cause?: unknown</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 | `constructor` | 构造函数 | <code>(maxBytes: number, observedBytes: number): ArtifactContentLimitError</code> | 创建该类的实例。 |
-| `maxBytes` | 属性 | <code>maxBytes: number</code> | max Bytes 字段。 |
-| `message` | 属性 | <code>message: string</code> | message 字段。 |
-| `name` | 属性 | <code>name: string</code> | name 字段。 |
-| `observedBytes` | 属性 | <code>observedBytes: number</code> | observed Bytes 字段。 |
-| `stack` | 属性 | <code>stack: string</code> | stack 字段。 |
-| `static captureStackTrace` | 方法 | <code>captureStackTrace(targetObject: object, constructorOpt?: Function): void</code> | Creates a `.stack` property on `targetObject`, which when accessed returns a string representing the location in the code at which `Error.captureStackTrace()` was called. ```js const myObject = {}; Error.captureStackTrace(myObject); myObject.stack; // Similar to `new Error().stack` ``` The first line of the trace will be prefixed with `${myObject.name}: ${myObject.message}`. The optional `constructorOpt` argument accepts a function. If given, all frames above `constructorOpt`, including `constructorOpt`, will be omitted from the generated stack trace. The `constructorOpt` argument is useful for hiding implementation details of error generation from the user. For instance: ```js function a() { b(); } function b() { c(); } function c() { // Create an error without stack trace to avoid calculating the stack trace twice. const { stackTraceLimit } = Error; Error.stackTraceLimit = 0; const error = new Error(); Error.stackTraceLimit = stackTraceLimit; // Capture the stack trace above function b Error.captureStackTrace(error, b); // Neither function c, nor b is included in the stack trace throw error; } a(); ``` |
-| `static prepareStackTrace` | 方法 | <code>prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any</code> | prepare Stack Trace 的公开运行时操作。 |
-| `static stackTraceLimit` | 属性 | <code>stackTraceLimit: number</code> | The `Error.stackTraceLimit` property specifies the number of stack frames collected by a stack trace (whether generated by `new Error().stack` or `Error.captureStackTrace(obj)`). The default value is `10` but may be set to any valid JavaScript number. Changes will affect any stack trace captured _after_ the value has been changed. If set to a non-number value, or set to a negative number, stack traces will not capture any frames. |
+| `maxBytes` | 属性 | <code>readonly maxBytes: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `message` | 属性 | <code>message: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `name` | 属性 | <code>name: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `observedBytes` | 属性 | <code>readonly observedBytes: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stack` | 属性 | <code>stack?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `static captureStackTrace` | 方法 | <code>static captureStackTrace(targetObject: object, constructorOpt?: Function): void</code> | Creates a `.stack` property on `targetObject`, which when accessed returns a string representing the location in the code at which `Error.captureStackTrace()` was called. ```js const myObject = {}; Error.captureStackTrace(myObject); myObject.stack; // Similar to `new Error().stack` ``` The first line of the trace will be prefixed with `${myObject.name}: ${myObject.message}`. The optional `constructorOpt` argument accepts a function. If given, all frames above `constructorOpt`, including `constructorOpt`, will be omitted from the generated stack trace. The `constructorOpt` argument is useful for hiding implementation details of error generation from the user. For instance: ```js function a() { b(); } function b() { c(); } function c() { // Create an error without stack trace to avoid calculating the stack trace twice. const { stackTraceLimit } = Error; Error.stackTraceLimit = 0; const error = new Error(); Error.stackTraceLimit = stackTraceLimit; // Capture the stack trace above function b Error.captureStackTrace(error, b); // Neither function c, nor b is included in the stack trace throw error; } a(); ``` |
+| `static prepareStackTrace` | 方法 | <code>static prepareStackTrace(err: Error, stackTraces: NodeJS.CallSite[]): any</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `static stackTraceLimit` | 属性 | <code>static stackTraceLimit: number</code> | The `Error.stackTraceLimit` property specifies the number of stack frames collected by a stack trace (whether generated by `new Error().stack` or `Error.captureStackTrace(obj)`). The default value is `10` but may be set to any valid JavaScript number. Changes will affect any stack trace captured _after_ the value has been changed. If set to a non-number value, or set to a negative number, stack traces will not capture any frames. |
 
-## `CollectedArtifactContent` 契约字段
+## `collectArtifactContent`
+
+Collect Artifact Content 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { collectArtifactContent } from '@codesoul-co/hypha-adapters-local';`
+- 源码模块: [`artifact-content-io`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
+
+### 声明
+
+```text
+export declare function collectArtifactContent(source: ArtifactByteSource, maxBytes: number): Promise<CollectedArtifactContent>;
+```
+
+### 调用签名
+
+```text
+collectArtifactContent(source: ArtifactByteSource, maxBytes: number): Promise<CollectedArtifactContent>
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `source` | <code>ArtifactByteSource</code> | 是 | 必需参数；接受的值由类型列定义。 |
+| `maxBytes` | <code>number</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `Promise<CollectedArtifactContent>`
+- 说明: 返回值契约由上述类型定义。
+
+## `hashArtifactBytes`
+
+Hash Artifact Bytes 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { hashArtifactBytes } from '@codesoul-co/hypha-adapters-local';`
+- 源码模块: [`artifact-content-io`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
+
+### 声明
+
+```text
+export declare function hashArtifactBytes(bytes: Uint8Array): string;
+```
+
+### 调用签名
+
+```text
+hashArtifactBytes(bytes: Uint8Array): string
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `bytes` | <code>Uint8Array&lt;ArrayBufferLike&gt;</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `string`
+- 说明: 返回值契约由上述类型定义。
+
+## `readArtifactStream`
+
+Read Artifact Stream 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { readArtifactStream } from '@codesoul-co/hypha-adapters-local';`
+- 源码模块: [`artifact-content-io`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
+
+### 声明
+
+```text
+export declare function readArtifactStream(stream: AsyncIterable<Uint8Array>): Promise<Uint8Array>;
+```
+
+### 调用签名
+
+```text
+readArtifactStream(stream: AsyncIterable<Uint8Array>): Promise<Uint8Array>
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `stream` | <code>AsyncIterable&lt;Uint8Array&lt;ArrayBufferLike&gt;&gt;</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `Promise<Uint8Array<ArrayBufferLike>>`
+- 说明: 返回值契约由上述类型定义。
+
+## `streamArtifactBytes`
+
+Stream Artifact Bytes 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { streamArtifactBytes } from '@codesoul-co/hypha-adapters-local';`
+- 源码模块: [`artifact-content-io`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
+
+### 声明
+
+```text
+export declare function streamArtifactBytes(bytes: Uint8Array): AsyncIterable<Uint8Array>;
+```
+
+### 调用签名
+
+```text
+streamArtifactBytes(bytes: Uint8Array): AsyncIterable<Uint8Array>
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `bytes` | <code>Uint8Array&lt;ArrayBufferLike&gt;</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `AsyncIterable<Uint8Array<ArrayBufferLike>>`
+- 说明: 返回值契约由上述类型定义。
+
+## `CollectedArtifactContent`
+
+Collected Artifact Content 接口，共包含 2 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { CollectedArtifactContent } from '@codesoul-co/hypha-adapters-local';`
+- 源码模块: [`artifact-content-io`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/adapters-local/src/artifact-content-io.ts)
+
+### 声明
+
+```text
+export interface CollectedArtifactContent {
+    bytes: Uint8Array;
+    contentHash: string;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `bytes` | 属性 | <code>bytes: Uint8Array&lt;ArrayBufferLike&gt;</code> | bytes 字段。 |
-| `contentHash` | 属性 | <code>contentHash: string</code> | content Hash 字段。 |
+| `bytes` | 属性 | <code>bytes: Uint8Array&lt;ArrayBufferLike&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `contentHash` | 属性 | <code>contentHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |

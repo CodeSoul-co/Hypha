@@ -1,127 +1,370 @@
 # `@codesoul-co/hypha-inference` / `backends`
 
 - Package index: [`@codesoul-co/hypha-inference`](/api/inference)
-- Package guide: [learning and composition guide](/packages/inference)
 - Source: [`packages/inference/src/backends.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
 - Exports: **11**
+
+## Using this module
+
+Use the Backends module for using the public contracts and operations for this capability boundary. It exports 7 classes, 1 function, 3 interfaces.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  FetchInferenceBackendTransport,
+  InferenceBackendRegistry,
+  LlamaCppInferenceBackend,
+  OllamaInferenceBackend,
+  OpenAIAPIInferenceBackend,
+  SGLangInferenceBackend,
+  VLLMInferenceBackend,
+  createDefaultInferenceBackendRegistry,
+} from '@codesoul-co/hypha-inference';
+
+import type {
+  DefaultInferenceBackendRegistryOptions,
+  HttpInferenceBackendConfig,
+  InferenceBackendTransport,
+} from '@codesoul-co/hypha-inference';
+```
+
+### Usage patterns
+
+- Use the 3 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 7 classes as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+- The module exposes 1 function as direct operation entrypoints. Every overload, required/optional parameter, and return type is documented below.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `FetchInferenceBackendTransport` | class | <code>new FetchInferenceBackendTransport(): FetchInferenceBackendTransport</code> | Runtime implementation for Fetch Inference Backend Transport; see its public constructor and members below. |
-| `InferenceBackendRegistry` | class | <code>new InferenceBackendRegistry(defaultBackendId?: string): InferenceBackendRegistry</code> | Runtime implementation for Inference Backend Registry; see its public constructor and members below. |
-| `LlamaCppInferenceBackend` | class | <code>new LlamaCppInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): LlamaCppInferenceBackend</code> | Runtime implementation for Llama Cpp Inference Backend; see its public constructor and members below. |
-| `OllamaInferenceBackend` | class | <code>new OllamaInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): OllamaInferenceBackend</code> | Runtime implementation for Ollama Inference Backend; see its public constructor and members below. |
-| `OpenAIAPIInferenceBackend` | class | <code>new OpenAIAPIInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): OpenAIAPIInferenceBackend</code> | Runtime implementation for Open AIAPI Inference Backend; see its public constructor and members below. |
-| `SGLangInferenceBackend` | class | <code>new SGLangInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): SGLangInferenceBackend</code> | Runtime implementation for SG Lang Inference Backend; see its public constructor and members below. |
-| `VLLMInferenceBackend` | class | <code>new VLLMInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): VLLMInferenceBackend</code> | Runtime implementation for VLLM Inference Backend; see its public constructor and members below. |
-| `createDefaultInferenceBackendRegistry` | function | <code>createDefaultInferenceBackendRegistry(options?: DefaultInferenceBackendRegistryOptions): InferenceBackendRegistry</code> | Creates Default Inference Backend Registry at this module boundary. |
-| `DefaultInferenceBackendRegistryOptions` | interface | <code>interface DefaultInferenceBackendRegistryOptions</code> | Field contract for Default Inference Backend Registry Options; see all contract members below. |
-| `HttpInferenceBackendConfig` | interface | <code>interface HttpInferenceBackendConfig</code> | Field contract for Http Inference Backend Config; see all contract members below. |
-| `InferenceBackendTransport` | interface | <code>interface InferenceBackendTransport</code> | Field contract for Inference Backend Transport; see all contract members below. |
+| `FetchInferenceBackendTransport` | class | <code>new FetchInferenceBackendTransport(): FetchInferenceBackendTransport</code> | Fetch Inference Backend Transport class with 3 public constructor or member entries; its exact declarations are listed below. |
+| `InferenceBackendRegistry` | class | <code>new InferenceBackendRegistry(defaultBackendId?: string): InferenceBackendRegistry</code> | Inference Backend Registry class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `LlamaCppInferenceBackend` | class | <code>new LlamaCppInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): LlamaCppInferenceBackend</code> | Llama Cpp Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `OllamaInferenceBackend` | class | <code>new OllamaInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): OllamaInferenceBackend</code> | Ollama Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `OpenAIAPIInferenceBackend` | class | <code>new OpenAIAPIInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): OpenAIAPIInferenceBackend</code> | Open AIAPI Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `SGLangInferenceBackend` | class | <code>new SGLangInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): SGLangInferenceBackend</code> | SG Lang Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `VLLMInferenceBackend` | class | <code>new VLLMInferenceBackend(config?: Partial&lt;HttpInferenceBackendConfig&gt;): VLLMInferenceBackend</code> | VLLM Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `createDefaultInferenceBackendRegistry` | function | <code>createDefaultInferenceBackendRegistry(options?: DefaultInferenceBackendRegistryOptions): InferenceBackendRegistry</code> | Create Default Inference Backend Registry function with 1 public call signature; parameters and return types are listed below. |
+| `DefaultInferenceBackendRegistryOptions` | interface | <code>interface DefaultInferenceBackendRegistryOptions</code> | Default Inference Backend Registry Options interface with 6 public fields or methods. |
+| `HttpInferenceBackendConfig` | interface | <code>interface HttpInferenceBackendConfig</code> | Http Inference Backend Config interface with 8 public fields or methods. |
+| `InferenceBackendTransport` | interface | <code>interface InferenceBackendTransport</code> | Inference Backend Transport interface with 2 public fields or methods. |
 
-## `FetchInferenceBackendTransport` public members
+## `FetchInferenceBackendTransport`
+
+Fetch Inference Backend Transport class with 3 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { FetchInferenceBackendTransport } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class FetchInferenceBackendTransport implements InferenceBackendTransport {
+    postJson<TResponse = unknown>(url: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number): Promise<TResponse>;
+    streamJson<TResponse = unknown>(url: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number): AsyncIterable<TResponse>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(): FetchInferenceBackendTransport</code> | Creates an instance of this class. |
-| `postJson` | method | <code>postJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): Promise&lt;TResponse&gt;</code> | Public runtime operation for post Json. |
-| `streamJson` | method | <code>streamJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): AsyncIterable&lt;TResponse&gt;</code> | Public runtime operation for stream Json. |
+| `postJson` | method | <code>postJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): Promise&lt;TResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `streamJson` | method | <code>streamJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): AsyncIterable&lt;TResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `InferenceBackendRegistry` public members
+## `InferenceBackendRegistry`
+
+Inference Backend Registry class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { InferenceBackendRegistry } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class InferenceBackendRegistry {
+    constructor(defaultBackendId?: string);
+    register(backend: InferenceBackend, options?: {
+            default?: boolean;
+        }): void;
+    get(id: string): InferenceBackend | null;
+    require(id: string): InferenceBackend;
+    default(): InferenceBackend;
+    list(): InferenceBackendRegistryEntry[];
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(defaultBackendId?: string): InferenceBackendRegistry</code> | Creates an instance of this class. |
-| `default` | method | <code>default(): InferenceBackend</code> | Public runtime operation for default. |
-| `get` | method | <code>get(id: string): InferenceBackend &#124; null</code> | Gets get at this module boundary. |
-| `list` | method | <code>list(): InferenceBackendRegistryEntry[]</code> | Lists list at this module boundary. |
-| `register` | method | <code>register(backend: InferenceBackend, options?: { default?: boolean; }): void</code> | Registers register at this module boundary. |
-| `require` | method | <code>require(id: string): InferenceBackend</code> | Public runtime operation for require. |
+| `default` | method | <code>default(): InferenceBackend</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get(id: string): InferenceBackend &#124; null</code> | Public method; parameters and return type are shown in the signature. |
+| `list` | method | <code>list(): InferenceBackendRegistryEntry[]</code> | Public method; parameters and return type are shown in the signature. |
+| `register` | method | <code>register(backend: InferenceBackend, options?: { default?: boolean; }): void</code> | Public method; parameters and return type are shown in the signature. |
+| `require` | method | <code>require(id: string): InferenceBackend</code> | Public method; parameters and return type are shown in the signature. |
 
-## `LlamaCppInferenceBackend` public members
+## `LlamaCppInferenceBackend`
+
+Llama Cpp Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { LlamaCppInferenceBackend } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class LlamaCppInferenceBackend extends HttpInferenceBackend {
+    constructor(config?: Partial<HttpInferenceBackendConfig>);
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public runtime operation for capabilities. |
+| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(config?: Partial&lt;HttpInferenceBackendConfig&gt;): LlamaCppInferenceBackend</code> | Creates an instance of this class. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for infer. |
-| `kind` | property | <code>kind: InferenceBackendKind</code> | Public kind property. |
-| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for stream. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `kind` | property | <code>readonly kind: InferenceBackendKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `OllamaInferenceBackend` public members
+## `OllamaInferenceBackend`
+
+Ollama Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { OllamaInferenceBackend } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class OllamaInferenceBackend extends HttpInferenceBackend {
+    constructor(config?: Partial<HttpInferenceBackendConfig>);
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public runtime operation for capabilities. |
+| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(config?: Partial&lt;HttpInferenceBackendConfig&gt;): OllamaInferenceBackend</code> | Creates an instance of this class. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for infer. |
-| `kind` | property | <code>kind: InferenceBackendKind</code> | Public kind property. |
-| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for stream. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `kind` | property | <code>readonly kind: InferenceBackendKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `OpenAIAPIInferenceBackend` public members
+## `OpenAIAPIInferenceBackend`
+
+Open AIAPI Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { OpenAIAPIInferenceBackend } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class OpenAIAPIInferenceBackend extends HttpInferenceBackend {
+    constructor(config?: Partial<HttpInferenceBackendConfig>);
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public runtime operation for capabilities. |
+| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(config?: Partial&lt;HttpInferenceBackendConfig&gt;): OpenAIAPIInferenceBackend</code> | Creates an instance of this class. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for infer. |
-| `kind` | property | <code>kind: InferenceBackendKind</code> | Public kind property. |
-| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for stream. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `kind` | property | <code>readonly kind: InferenceBackendKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `SGLangInferenceBackend` public members
+## `SGLangInferenceBackend`
+
+SG Lang Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { SGLangInferenceBackend } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class SGLangInferenceBackend extends HttpInferenceBackend {
+    constructor(config?: Partial<HttpInferenceBackendConfig>);
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public runtime operation for capabilities. |
+| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(config?: Partial&lt;HttpInferenceBackendConfig&gt;): SGLangInferenceBackend</code> | Creates an instance of this class. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for infer. |
-| `kind` | property | <code>kind: InferenceBackendKind</code> | Public kind property. |
-| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for stream. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `kind` | property | <code>readonly kind: InferenceBackendKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `VLLMInferenceBackend` public members
+## `VLLMInferenceBackend`
+
+VLLM Inference Backend class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { VLLMInferenceBackend } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare class VLLMInferenceBackend extends HttpInferenceBackend {
+    constructor(config?: Partial<HttpInferenceBackendConfig>);
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public runtime operation for capabilities. |
+| `capabilities` | method | <code>capabilities(): InferenceBackendCapabilities</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(config?: Partial&lt;HttpInferenceBackendConfig&gt;): VLLMInferenceBackend</code> | Creates an instance of this class. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for infer. |
-| `kind` | property | <code>kind: InferenceBackendKind</code> | Public kind property. |
-| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public runtime operation for stream. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `infer` | method | <code>infer(request: InferenceBackendRequest): Promise&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `kind` | property | <code>readonly kind: InferenceBackendKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stream` | method | <code>stream(request: InferenceBackendRequest): AsyncIterable&lt;InferenceBackendResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `DefaultInferenceBackendRegistryOptions` contract members
+## `createDefaultInferenceBackendRegistry`
+
+Create Default Inference Backend Registry function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { createDefaultInferenceBackendRegistry } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export declare function createDefaultInferenceBackendRegistry(options?: DefaultInferenceBackendRegistryOptions): InferenceBackendRegistry;
+```
+
+### Call signature
+
+```text
+createDefaultInferenceBackendRegistry(options?: DefaultInferenceBackendRegistryOptions): InferenceBackendRegistry
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `options` | <code>DefaultInferenceBackendRegistryOptions</code> | No | Optional parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `InferenceBackendRegistry`
+- Description: The return contract is defined by the type shown above.
+
+## `DefaultInferenceBackendRegistryOptions`
+
+Default Inference Backend Registry Options interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { DefaultInferenceBackendRegistryOptions } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export interface DefaultInferenceBackendRegistryOptions {
+    defaultBackendId?: string;
+    ollama?: Partial<HttpInferenceBackendConfig>;
+    sglang?: Partial<HttpInferenceBackendConfig>;
+    vllm?: Partial<HttpInferenceBackendConfig>;
+    llamaCpp?: Partial<HttpInferenceBackendConfig>;
+    openaiApi?: Partial<HttpInferenceBackendConfig>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `defaultBackendId` | property | <code>defaultBackendId: string</code> | Public default Backend Id property. |
-| `llamaCpp` | property | <code>llamaCpp: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public llama Cpp property. |
-| `ollama` | property | <code>ollama: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public ollama property. |
-| `openaiApi` | property | <code>openaiApi: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public openai Api property. |
-| `sglang` | property | <code>sglang: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public sglang property. |
-| `vllm` | property | <code>vllm: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public vllm property. |
+| `defaultBackendId` | property | <code>defaultBackendId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `llamaCpp` | property | <code>llamaCpp?: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ollama` | property | <code>ollama?: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `openaiApi` | property | <code>openaiApi?: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sglang` | property | <code>sglang?: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `vllm` | property | <code>vllm?: Partial&lt;HttpInferenceBackendConfig&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `HttpInferenceBackendConfig` contract members
+## `HttpInferenceBackendConfig`
+
+Http Inference Backend Config interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { HttpInferenceBackendConfig } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export interface HttpInferenceBackendConfig {
+    id?: string;
+    baseUrl: string;
+    endpoint: string;
+    apiKey?: string;
+    apiKeyEnv?: string;
+    timeoutMs?: number;
+    transport?: InferenceBackendTransport;
+    capabilities?: Partial<InferenceBackendCapabilities>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `apiKey` | property | <code>apiKey: string</code> | Public api Key property. |
-| `apiKeyEnv` | property | <code>apiKeyEnv: string</code> | Public api Key Env property. |
-| `baseUrl` | property | <code>baseUrl: string</code> | Public base Url property. |
-| `capabilities` | property | <code>capabilities: Partial&lt;InferenceBackendCapabilities&gt;</code> | Public capabilities property. |
-| `endpoint` | property | <code>endpoint: string</code> | Public endpoint property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `timeoutMs` | property | <code>timeoutMs: number</code> | Public timeout Ms property. |
-| `transport` | property | <code>transport: InferenceBackendTransport</code> | Public transport property. |
+| `apiKey` | property | <code>apiKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `apiKeyEnv` | property | <code>apiKeyEnv?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `baseUrl` | property | <code>baseUrl: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `capabilities` | property | <code>capabilities?: Partial&lt;InferenceBackendCapabilities&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `endpoint` | property | <code>endpoint: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `timeoutMs` | property | <code>timeoutMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `transport` | property | <code>transport?: InferenceBackendTransport</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `InferenceBackendTransport` contract members
+## `InferenceBackendTransport`
+
+Inference Backend Transport interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InferenceBackendTransport } from '@codesoul-co/hypha-inference';`
+- Source module: [`backends`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/backends.ts)
+
+### Declaration
+
+```text
+export interface InferenceBackendTransport {
+    postJson<TResponse = unknown>(url: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number): Promise<TResponse>;
+    streamJson?<TResponse = unknown>(url: string, body: unknown, headers?: Record<string, string>, timeoutMs?: number): AsyncIterable<TResponse>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `postJson` | method | <code>postJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): Promise&lt;TResponse&gt;</code> | Public runtime operation for post Json. |
-| `streamJson` | method | <code>streamJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): AsyncIterable&lt;TResponse&gt;</code> | Public runtime operation for stream Json. |
+| `postJson` | method | <code>postJson&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): Promise&lt;TResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `streamJson` | method | <code>streamJson?&lt;TResponse = unknown&gt;(url: string, body: unknown, headers?: Record&lt;string, string&gt;, timeoutMs?: number): AsyncIterable&lt;TResponse&gt;</code> | Public method; parameters and return type are shown in the signature. |

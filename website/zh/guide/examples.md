@@ -53,7 +53,7 @@ npm run feature -- fsm
 }
 ```
 
-使用[逐功能地图](/zh/guide/capability-map)理解边界，使用[完整 API 参考](/zh/api/)查询每个导入类、函数与成员。
+[完整 API 参考](/zh/api/)记录这些示例使用的每个类、函数、类型、常量、参数、返回值与公开成员。
 
 ## 15 包 Tour 分别验证什么
 

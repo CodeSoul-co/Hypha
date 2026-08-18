@@ -1,83 +1,262 @@
 # `@codesoul-co/hypha-core` / `contracts/runtime-replay`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/contracts/runtime-replay.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
 - Exports: **8**
+
+## Using this module
+
+Use the Runtime replay module for declaring and runtime-validating contracts. It exports 1 constant, 6 interfaces, 1 type.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  RUNTIME_REPLAY_DIVERGENCE_KINDS,
+} from '@codesoul-co/hypha-core';
+
+import type {
+  RuntimeReplayDivergence,
+  RuntimeReplayRequest,
+  RuntimeReplayResult,
+  RuntimeReplayServiceContract,
+  RuntimeReplayVerificationRequest,
+  RuntimeReplayVerificationResult,
+  RuntimeReplayDivergenceKind,
+} from '@codesoul-co/hypha-core';
+```
+
+### Usage patterns
+
+- Use the 7 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The 1 constant/enum export provides stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `RUNTIME_REPLAY_DIVERGENCE_KINDS` | constant | <code>const RUNTIME_REPLAY_DIVERGENCE_KINDS: readonly ["workflow_revision", "process_hash", "dependency_snapshot", "projection_version", "snapshot_checksum"]</code> | RUNTIME REPLAY DIVERGENCE KINDS constant exported by the `contracts/runtime-replay` module. |
-| `RuntimeReplayDivergence` | interface | <code>interface RuntimeReplayDivergence</code> | Field contract for Runtime Replay Divergence; see all contract members below. |
-| `RuntimeReplayRequest` | interface | <code>interface RuntimeReplayRequest</code> | Field contract for Runtime Replay Request; see all contract members below. |
-| `RuntimeReplayResult` | interface | <code>interface RuntimeReplayResult</code> | Field contract for Runtime Replay Result; see all contract members below. |
-| `RuntimeReplayServiceContract` | interface | <code>interface RuntimeReplayServiceContract</code> | Field contract for Runtime Replay Service Contract; see all contract members below. |
-| `RuntimeReplayVerificationRequest` | interface | <code>interface RuntimeReplayVerificationRequest</code> | Field contract for Runtime Replay Verification Request; see all contract members below. |
-| `RuntimeReplayVerificationResult` | interface | <code>interface RuntimeReplayVerificationResult</code> | Field contract for Runtime Replay Verification Result; see all contract members below. |
-| `RuntimeReplayDivergenceKind` | type | <code>type RuntimeReplayDivergenceKind = (typeof RUNTIME_REPLAY_DIVERGENCE_KINDS)[number]</code> | Public type alias for Runtime Replay Divergence Kind. |
+| `RuntimeReplayDivergence` | interface | <code>interface RuntimeReplayDivergence</code> | Runtime Replay Divergence interface with 4 public fields or methods. |
+| `RuntimeReplayRequest` | interface | <code>interface RuntimeReplayRequest</code> | Runtime Replay Request interface with 7 public fields or methods. |
+| `RuntimeReplayResult` | interface | <code>interface RuntimeReplayResult</code> | Runtime Replay Result interface with 16 public fields or methods. |
+| `RuntimeReplayServiceContract` | interface | <code>interface RuntimeReplayServiceContract</code> | Runtime Replay Service Contract interface with 2 public fields or methods. |
+| `RuntimeReplayVerificationRequest` | interface | <code>interface RuntimeReplayVerificationRequest</code> | Runtime Replay Verification Request interface with 2 public fields or methods. |
+| `RuntimeReplayVerificationResult` | interface | <code>interface RuntimeReplayVerificationResult</code> | Runtime Replay Verification Result interface with 3 public fields or methods. |
+| `RuntimeReplayDivergenceKind` | type | <code>type RuntimeReplayDivergenceKind = (typeof RUNTIME_REPLAY_DIVERGENCE_KINDS)[number]</code> | Public type alias for Runtime Replay Divergence Kind; the declaration contains its complete type expression. |
 
-## `RuntimeReplayDivergence` contract members
+## `RUNTIME_REPLAY_DIVERGENCE_KINDS`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `actual` | property | <code>actual: string</code> | Public actual property. |
-| `expected` | property | <code>expected: string</code> | Public expected property. |
-| `kind` | property | <code>kind: "workflow_revision" &#124; "process_hash" &#124; "dependency_snapshot" &#124; "projection_version" &#124; "snapshot_checksum"</code> | Public kind property. |
-| `message` | property | <code>message: string</code> | Public message property. |
+RUNTIME REPLAY DIVERGENCE KINDS constant exported by the `contracts/runtime-replay` module.
 
-## `RuntimeReplayRequest` contract members
+- Kind: constant
+- Import: `import { RUNTIME_REPLAY_DIVERGENCE_KINDS } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `checkpointId` | property | <code>checkpointId: string</code> | Public checkpoint Id property. |
-| `expectedDependencySnapshotRef` | property | <code>expectedDependencySnapshotRef: string</code> | Public expected Dependency Snapshot Ref property. |
-| `expectedProcessHash` | property | <code>expectedProcessHash: string</code> | Public expected Process Hash property. |
-| `expectedWorkflowRevision` | property | <code>expectedWorkflowRevision: string</code> | Public expected Workflow Revision property. |
-| `requestedAt` | property | <code>requestedAt: string</code> | Public requested At property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
-| `toSequence` | property | <code>toSequence: number</code> | Public to Sequence property. |
+### Declaration
 
-## `RuntimeReplayResult` contract members
+```text
+export declare const RUNTIME_REPLAY_DIVERGENCE_KINDS: readonly ["workflow_revision", "process_hash", "dependency_snapshot", "projection_version", "snapshot_checksum"];
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `appliedEventCount` | property | <code>appliedEventCount: number</code> | Public applied Event Count property. |
-| `baseEventSequence` | property | <code>baseEventSequence: number</code> | Public base Event Sequence property. |
-| `checkpointId` | property | <code>checkpointId: string</code> | Public checkpoint Id property. |
-| `completedAt` | property | <code>completedAt: string</code> | Public completed At property. |
-| `dependencySnapshotRef` | property | <code>dependencySnapshotRef: string</code> | Public dependency Snapshot Ref property. |
-| `divergences` | property | <code>divergences: RuntimeReplayDivergence[]</code> | Public divergences property. |
-| `eventIds` | property | <code>eventIds: string[]</code> | Public event Ids property. |
-| `finalSnapshot` | property | <code>finalSnapshot: RuntimeOrchestrationProjection</code> | Public final Snapshot property. |
-| `finalSnapshotChecksum` | property | <code>finalSnapshotChecksum: string</code> | Public final Snapshot Checksum property. |
-| `mode` | property | <code>mode: "deterministic"</code> | Public mode property. |
-| `processHash` | property | <code>processHash: string</code> | Public process Hash property. |
-| `projectionVersion` | property | <code>projectionVersion: string</code> | Public projection Version property. |
-| `replayedEventCount` | property | <code>replayedEventCount: number</code> | Public replayed Event Count property. |
-| `sourceRunId` | property | <code>sourceRunId: string</code> | Public source Run Id property. |
-| `targetEventSequence` | property | <code>targetEventSequence: number</code> | Public target Event Sequence property. |
-| `workflowRevision` | property | <code>workflowRevision: string</code> | Public workflow Revision property. |
+## `RuntimeReplayDivergence`
 
-## `RuntimeReplayServiceContract` contract members
+Runtime Replay Divergence interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeReplayDivergence } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export interface RuntimeReplayDivergence {
+    kind: RuntimeReplayDivergenceKind;
+    expected: string;
+    actual: string;
+    message: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `replay` | method | <code>replay(request: RuntimeReplayRequest): Promise&lt;RuntimeReplayResult&gt;</code> | Public runtime operation for replay. |
-| `verify` | method | <code>verify(request: RuntimeReplayVerificationRequest): Promise&lt;RuntimeReplayVerificationResult&gt;</code> | Public runtime operation for verify. |
+| `actual` | property | <code>actual: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expected` | property | <code>expected: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>kind: "workflow_revision" &#124; "process_hash" &#124; "dependency_snapshot" &#124; "projection_version" &#124; "snapshot_checksum"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `message` | property | <code>message: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `RuntimeReplayVerificationRequest` contract members
+## `RuntimeReplayRequest`
+
+Runtime Replay Request interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeReplayRequest } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export interface RuntimeReplayRequest {
+    scope: RuntimeScope;
+    checkpointId?: string;
+    expectedWorkflowRevision: string;
+    expectedProcessHash: string;
+    expectedDependencySnapshotRef: string;
+    toSequence?: number;
+    requestedAt: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `expectedSnapshotChecksum` | property | <code>expectedSnapshotChecksum: string</code> | Public expected Snapshot Checksum property. |
-| `replay` | property | <code>replay: RuntimeReplayRequest</code> | Public replay property. |
+| `checkpointId` | property | <code>checkpointId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expectedDependencySnapshotRef` | property | <code>expectedDependencySnapshotRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expectedProcessHash` | property | <code>expectedProcessHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expectedWorkflowRevision` | property | <code>expectedWorkflowRevision: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requestedAt` | property | <code>requestedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toSequence` | property | <code>toSequence?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `RuntimeReplayVerificationResult` contract members
+## `RuntimeReplayResult`
+
+Runtime Replay Result interface with 16 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeReplayResult } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export interface RuntimeReplayResult {
+    sourceRunId: string;
+    mode: 'deterministic';
+    checkpointId: string;
+    baseEventSequence: number;
+    targetEventSequence: number;
+    replayedEventCount: number;
+    appliedEventCount: number;
+    eventIds: string[];
+    workflowRevision: string;
+    processHash: string;
+    dependencySnapshotRef: string;
+    projectionVersion: string;
+    finalSnapshot: RuntimeOrchestrationProjection;
+    finalSnapshotChecksum: string;
+    divergences: RuntimeReplayDivergence[];
+    completedAt: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `divergences` | property | <code>divergences: RuntimeReplayDivergence[]</code> | Public divergences property. |
-| `matches` | property | <code>matches: boolean</code> | Public matches property. |
-| `replay` | property | <code>replay: RuntimeReplayResult</code> | Public replay property. |
+| `appliedEventCount` | property | <code>appliedEventCount: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `baseEventSequence` | property | <code>baseEventSequence: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `checkpointId` | property | <code>checkpointId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `completedAt` | property | <code>completedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `dependencySnapshotRef` | property | <code>dependencySnapshotRef: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `divergences` | property | <code>divergences: RuntimeReplayDivergence[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `eventIds` | property | <code>eventIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `finalSnapshot` | property | <code>finalSnapshot: RuntimeOrchestrationProjection</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `finalSnapshotChecksum` | property | <code>finalSnapshotChecksum: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: "deterministic"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `processHash` | property | <code>processHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `projectionVersion` | property | <code>projectionVersion: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `replayedEventCount` | property | <code>replayedEventCount: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceRunId` | property | <code>sourceRunId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `targetEventSequence` | property | <code>targetEventSequence: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `workflowRevision` | property | <code>workflowRevision: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeReplayServiceContract`
+
+Runtime Replay Service Contract interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeReplayServiceContract } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export interface RuntimeReplayServiceContract {
+    replay(request: RuntimeReplayRequest): Promise<RuntimeReplayResult>;
+    verify(request: RuntimeReplayVerificationRequest): Promise<RuntimeReplayVerificationResult>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `replay` | method | <code>replay(request: RuntimeReplayRequest): Promise&lt;RuntimeReplayResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `verify` | method | <code>verify(request: RuntimeReplayVerificationRequest): Promise&lt;RuntimeReplayVerificationResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `RuntimeReplayVerificationRequest`
+
+Runtime Replay Verification Request interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeReplayVerificationRequest } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export interface RuntimeReplayVerificationRequest {
+    replay: RuntimeReplayRequest;
+    expectedSnapshotChecksum: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `expectedSnapshotChecksum` | property | <code>expectedSnapshotChecksum: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `replay` | property | <code>replay: RuntimeReplayRequest</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeReplayVerificationResult`
+
+Runtime Replay Verification Result interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeReplayVerificationResult } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export interface RuntimeReplayVerificationResult {
+    replay: RuntimeReplayResult;
+    matches: boolean;
+    divergences: RuntimeReplayDivergence[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `divergences` | property | <code>divergences: RuntimeReplayDivergence[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `matches` | property | <code>matches: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `replay` | property | <code>replay: RuntimeReplayResult</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeReplayDivergenceKind`
+
+Public type alias for Runtime Replay Divergence Kind; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { RuntimeReplayDivergenceKind } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-replay`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-replay.ts)
+
+### Declaration
+
+```text
+export type RuntimeReplayDivergenceKind = (typeof RUNTIME_REPLAY_DIVERGENCE_KINDS)[number];
+```

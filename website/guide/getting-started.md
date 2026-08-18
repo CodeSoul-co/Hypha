@@ -22,22 +22,19 @@ Add capability/provider packages only when the composition needs them. See the [
 
 Create an `agent/` directory containing:
 
-| File | Responsibility |
-| --- | --- |
+| File               | Responsibility                                                            |
+| ------------------ | ------------------------------------------------------------------------- |
 | `domain-pack.yaml` | Task/output schemas, Workflow, allow-lists, profiles, policy and fixtures |
-| `prompt.json` | Versioned Prompt registration payload |
-| `skill.md` | Progressively loaded instruction asset and trust metadata |
-| `hypha.user.yaml` | Deployment-owned Server overlay; never commit secrets |
+| `prompt.json`      | Versioned Prompt registration payload                                     |
+| `skill.md`         | Progressively loaded instruction asset and trust metadata                 |
+| `hypha.user.yaml`  | Deployment-owned Server overlay; never commit secrets                     |
 
 Domain-specific workflow, prompts and schemas belong here—not in Core, Kernel or Harness.
 
 ## 3. Compile, then bind providers
 
 ```ts
-import {
-  compileDomainPackToHarnessedSystem,
-  loadDomainPackFile,
-} from '@codesoul-co/hypha-domain';
+import { compileDomainPackToHarnessedSystem, loadDomainPackFile } from '@codesoul-co/hypha-domain';
 
 const pack = await loadDomainPackFile('./agent/domain-pack.yaml');
 const system = compileDomainPackToHarnessedSystem(pack, {
@@ -66,9 +63,3 @@ npm test
 ```
 
 At minimum, test deterministic compilation, selected capability IDs, output schema, FSM topology, Event scopes and replayed state.
-
-## Next
-
-- Understand [Events, Sessions, Runs and Domain Packs](/guide/architecture).
-- Build the [complete composition](/guide/full-system).
-- Copy and run the repository’s [release-agent example](/guide/examples).

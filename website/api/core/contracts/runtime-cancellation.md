@@ -1,9 +1,42 @@
 # `@codesoul-co/hypha-core` / `contracts/runtime-cancellation`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/contracts/runtime-cancellation.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
 - Exports: **18**
+
+## Using this module
+
+Use the Runtime cancellation module for declaring and runtime-validating contracts. It exports 4 constants, 10 interfaces, 4 types.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  RUNTIME_CANCELLATION_DISPOSITIONS,
+  RUNTIME_CANCELLATION_PROPAGATIONS,
+  RUNTIME_CANCELLATION_TARGET_STATUSES,
+  RUNTIME_CANCELLATION_TARGET_TYPES,
+} from '@codesoul-co/hypha-core';
+
+import type {
+  RuntimeActivityCancellationPort,
+  RuntimeActivityCancellationRequest,
+  RuntimeCancelCommand,
+  RuntimeCancellationPolicy,
+  RuntimeCancellationTargetResult,
+  RuntimeCancelResult,
+  RuntimeChildRunCancellationPort,
+  RuntimeChildRunCancellationRequest,
+} from '@codesoul-co/hypha-core';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 14 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The 4 constant/enum exports provide stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.
+
 
 ## Public exports
 
@@ -13,110 +46,415 @@
 | `RUNTIME_CANCELLATION_PROPAGATIONS` | constant | <code>const RUNTIME_CANCELLATION_PROPAGATIONS: readonly ["none", "children", "all_descendants"]</code> | RUNTIME CANCELLATION PROPAGATIONS constant exported by the `contracts/runtime-cancellation` module. |
 | `RUNTIME_CANCELLATION_TARGET_STATUSES` | constant | <code>const RUNTIME_CANCELLATION_TARGET_STATUSES: readonly ["cancelled", "already_terminal", "not_found", "failed"]</code> | RUNTIME CANCELLATION TARGET STATUSES constant exported by the `contracts/runtime-cancellation` module. |
 | `RUNTIME_CANCELLATION_TARGET_TYPES` | constant | <code>const RUNTIME_CANCELLATION_TARGET_TYPES: readonly ["activity", "child_run", "session_command"]</code> | RUNTIME CANCELLATION TARGET TYPES constant exported by the `contracts/runtime-cancellation` module. |
-| `RuntimeActivityCancellationPort` | interface | <code>interface RuntimeActivityCancellationPort</code> | Field contract for Runtime Activity Cancellation Port; see all contract members below. |
-| `RuntimeActivityCancellationRequest` | interface | <code>interface RuntimeActivityCancellationRequest</code> | Field contract for Runtime Activity Cancellation Request; see all contract members below. |
-| `RuntimeCancelCommand` | interface | <code>interface RuntimeCancelCommand</code> | Field contract for Runtime Cancel Command; see all contract members below. |
-| `RuntimeCancellationPolicy` | interface | <code>interface RuntimeCancellationPolicy</code> | Field contract for Runtime Cancellation Policy; see all contract members below. |
-| `RuntimeCancellationTargetResult` | interface | <code>interface RuntimeCancellationTargetResult</code> | Field contract for Runtime Cancellation Target Result; see all contract members below. |
-| `RuntimeCancelResult` | interface | <code>interface RuntimeCancelResult</code> | Field contract for Runtime Cancel Result; see all contract members below. |
-| `RuntimeChildRunCancellationPort` | interface | <code>interface RuntimeChildRunCancellationPort</code> | Field contract for Runtime Child Run Cancellation Port; see all contract members below. |
-| `RuntimeChildRunCancellationRequest` | interface | <code>interface RuntimeChildRunCancellationRequest</code> | Field contract for Runtime Child Run Cancellation Request; see all contract members below. |
-| `RuntimeChildRunListRequest` | interface | <code>interface RuntimeChildRunListRequest</code> | Field contract for Runtime Child Run List Request; see all contract members below. |
-| `RuntimeChildRunReference` | interface | <code>interface RuntimeChildRunReference</code> | Field contract for Runtime Child Run Reference; see all contract members below. |
-| `RuntimeCancellationDisposition` | type | <code>type RuntimeCancellationDisposition = (typeof RUNTIME_CANCELLATION_DISPOSITIONS)[number]</code> | Public type alias for Runtime Cancellation Disposition. |
-| `RuntimeCancellationPropagation` | type | <code>type RuntimeCancellationPropagation = (typeof RUNTIME_CANCELLATION_PROPAGATIONS)[number]</code> | Public type alias for Runtime Cancellation Propagation. |
-| `RuntimeCancellationTargetStatus` | type | <code>type RuntimeCancellationTargetStatus = (typeof RUNTIME_CANCELLATION_TARGET_STATUSES)[number]</code> | Public type alias for Runtime Cancellation Target Status. |
-| `RuntimeCancellationTargetType` | type | <code>type RuntimeCancellationTargetType = (typeof RUNTIME_CANCELLATION_TARGET_TYPES)[number]</code> | Public type alias for Runtime Cancellation Target Type. |
+| `RuntimeActivityCancellationPort` | interface | <code>interface RuntimeActivityCancellationPort</code> | Runtime Activity Cancellation Port interface with 1 public fields or methods. |
+| `RuntimeActivityCancellationRequest` | interface | <code>interface RuntimeActivityCancellationRequest</code> | Runtime Activity Cancellation Request interface with 7 public fields or methods. |
+| `RuntimeCancelCommand` | interface | <code>interface RuntimeCancelCommand</code> | Runtime Cancel Command interface with 9 public fields or methods. |
+| `RuntimeCancellationPolicy` | interface | <code>interface RuntimeCancellationPolicy</code> | Runtime Cancellation Policy interface with 3 public fields or methods. |
+| `RuntimeCancellationTargetResult` | interface | <code>interface RuntimeCancellationTargetResult</code> | Runtime Cancellation Target Result interface with 4 public fields or methods. |
+| `RuntimeCancelResult` | interface | <code>interface RuntimeCancelResult</code> | Runtime Cancel Result interface with 6 public fields or methods. |
+| `RuntimeChildRunCancellationPort` | interface | <code>interface RuntimeChildRunCancellationPort</code> | Runtime Child Run Cancellation Port interface with 2 public fields or methods. |
+| `RuntimeChildRunCancellationRequest` | interface | <code>interface RuntimeChildRunCancellationRequest</code> | Runtime Child Run Cancellation Request interface with 8 public fields or methods. |
+| `RuntimeChildRunListRequest` | interface | <code>interface RuntimeChildRunListRequest</code> | Runtime Child Run List Request interface with 2 public fields or methods. |
+| `RuntimeChildRunReference` | interface | <code>interface RuntimeChildRunReference</code> | Runtime Child Run Reference interface with 1 public fields or methods. |
+| `RuntimeCancellationDisposition` | type | <code>type RuntimeCancellationDisposition = (typeof RUNTIME_CANCELLATION_DISPOSITIONS)[number]</code> | Public type alias for Runtime Cancellation Disposition; the declaration contains its complete type expression. |
+| `RuntimeCancellationPropagation` | type | <code>type RuntimeCancellationPropagation = (typeof RUNTIME_CANCELLATION_PROPAGATIONS)[number]</code> | Public type alias for Runtime Cancellation Propagation; the declaration contains its complete type expression. |
+| `RuntimeCancellationTargetStatus` | type | <code>type RuntimeCancellationTargetStatus = (typeof RUNTIME_CANCELLATION_TARGET_STATUSES)[number]</code> | Public type alias for Runtime Cancellation Target Status; the declaration contains its complete type expression. |
+| `RuntimeCancellationTargetType` | type | <code>type RuntimeCancellationTargetType = (typeof RUNTIME_CANCELLATION_TARGET_TYPES)[number]</code> | Public type alias for Runtime Cancellation Target Type; the declaration contains its complete type expression. |
 
-## `RuntimeActivityCancellationPort` contract members
+## `RUNTIME_CANCELLATION_DISPOSITIONS`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cancel` | method | <code>cancel(request: RuntimeActivityCancellationRequest): Promise&lt;RuntimeCancellationTargetResult&gt;</code> | Cancels cancel at this module boundary. |
+RUNTIME CANCELLATION DISPOSITIONS constant exported by the `contracts/runtime-cancellation` module.
 
-## `RuntimeActivityCancellationRequest` contract members
+- Kind: constant
+- Import: `import { RUNTIME_CANCELLATION_DISPOSITIONS } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `activityId` | property | <code>activityId: string</code> | Public activity Id property. |
-| `deadlineAt` | property | <code>deadlineAt: string</code> | Public deadline At property. |
-| `fencingToken` | property | <code>fencingToken: number</code> | Public fencing Token property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `requestedAt` | property | <code>requestedAt: string</code> | Public requested At property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
+### Declaration
 
-## `RuntimeCancelCommand` contract members
+```text
+export declare const RUNTIME_CANCELLATION_DISPOSITIONS: readonly ["applied", "reused"];
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `commandId` | property | <code>commandId: string</code> | Public command Id property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public lease Ttl Ms property. |
-| `ownerId` | property | <code>ownerId: string</code> | Public owner Id property. |
-| `policy` | property | <code>policy: RuntimeCancellationPolicy</code> | Public policy property. |
-| `principal` | property | <code>principal: RuntimePrincipal</code> | Public principal property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `requestedAt` | property | <code>requestedAt: string</code> | Public requested At property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
+## `RUNTIME_CANCELLATION_PROPAGATIONS`
 
-## `RuntimeCancellationPolicy` contract members
+RUNTIME CANCELLATION PROPAGATIONS constant exported by the `contracts/runtime-cancellation` module.
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cancelRunningActivities` | property | <code>cancelRunningActivities: boolean</code> | Public cancel Running Activities property. |
-| `propagation` | property | <code>propagation: "none" &#124; "children" &#124; "all_descendants"</code> | Public propagation property. |
-| `waitGraceMs` | property | <code>waitGraceMs: number</code> | Public wait Grace Ms property. |
+- Kind: constant
+- Import: `import { RUNTIME_CANCELLATION_PROPAGATIONS } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
 
-## `RuntimeCancellationTargetResult` contract members
+### Declaration
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `error` | property | <code>error: NormalizedRuntimeError</code> | Public error property. |
-| `status` | property | <code>status: "cancelled" &#124; "failed" &#124; "not_found" &#124; "already_terminal"</code> | Public status property. |
-| `targetId` | property | <code>targetId: string</code> | Public target Id property. |
-| `targetType` | property | <code>targetType: "activity" &#124; "child_run" &#124; "session_command"</code> | Public target Type property. |
+```text
+export declare const RUNTIME_CANCELLATION_PROPAGATIONS: readonly ["none", "children", "all_descendants"];
+```
 
-## `RuntimeCancelResult` contract members
+## `RUNTIME_CANCELLATION_TARGET_STATUSES`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `commandId` | property | <code>commandId: string</code> | Public command Id property. |
-| `disposition` | property | <code>disposition: "applied" &#124; "reused"</code> | Public disposition property. |
-| `eventIds` | property | <code>eventIds: string[]</code> | Public event Ids property. |
-| `projection` | property | <code>projection: RuntimeOrchestrationProjection</code> | Public projection property. |
-| `targetResults` | property | <code>targetResults: RuntimeCancellationTargetResult[]</code> | Public target Results property. |
-| `unresolvedActivityIds` | property | <code>unresolvedActivityIds: string[]</code> | Public unresolved Activity Ids property. |
+RUNTIME CANCELLATION TARGET STATUSES constant exported by the `contracts/runtime-cancellation` module.
 
-## `RuntimeChildRunCancellationPort` contract members
+- Kind: constant
+- Import: `import { RUNTIME_CANCELLATION_TARGET_STATUSES } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `cancel` | method | <code>cancel(request: RuntimeChildRunCancellationRequest): Promise&lt;RuntimeCancellationTargetResult&gt;</code> | Cancels cancel at this module boundary. |
-| `listChildren` | method | <code>listChildren(request: RuntimeChildRunListRequest): Promise&lt;RuntimeChildRunReference[]&gt;</code> | Lists Children at this module boundary. |
+### Declaration
 
-## `RuntimeChildRunCancellationRequest` contract members
+```text
+export declare const RUNTIME_CANCELLATION_TARGET_STATUSES: readonly ["cancelled", "already_terminal", "not_found", "failed"];
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `childRunId` | property | <code>childRunId: string</code> | Public child Run Id property. |
-| `deadlineAt` | property | <code>deadlineAt: string</code> | Public deadline At property. |
-| `fencingToken` | property | <code>fencingToken: number</code> | Public fencing Token property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `parentScope` | property | <code>parentScope: RuntimeScope</code> | Public parent Scope property. |
-| `propagation` | property | <code>propagation: "children" &#124; "all_descendants"</code> | Public propagation property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `requestedAt` | property | <code>requestedAt: string</code> | Public requested At property. |
+## `RUNTIME_CANCELLATION_TARGET_TYPES`
 
-## `RuntimeChildRunListRequest` contract members
+RUNTIME CANCELLATION TARGET TYPES constant exported by the `contracts/runtime-cancellation` module.
+
+- Kind: constant
+- Import: `import { RUNTIME_CANCELLATION_TARGET_TYPES } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export declare const RUNTIME_CANCELLATION_TARGET_TYPES: readonly ["activity", "child_run", "session_command"];
+```
+
+## `RuntimeActivityCancellationPort`
+
+Runtime Activity Cancellation Port interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeActivityCancellationPort } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeActivityCancellationPort {
+    cancel(request: RuntimeActivityCancellationRequest): Promise<RuntimeCancellationTargetResult>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `requestedAt` | property | <code>requestedAt: string</code> | Public requested At property. |
-| `scope` | property | <code>scope: RuntimeScope</code> | Public scope property. |
+| `cancel` | method | <code>cancel(request: RuntimeActivityCancellationRequest): Promise&lt;RuntimeCancellationTargetResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `RuntimeChildRunReference` contract members
+## `RuntimeActivityCancellationRequest`
+
+Runtime Activity Cancellation Request interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeActivityCancellationRequest } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeActivityCancellationRequest {
+    scope: RuntimeScope;
+    activityId: string;
+    reason: string;
+    requestedAt: string;
+    deadlineAt?: string;
+    fencingToken: number;
+    idempotencyKey: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
+| `activityId` | property | <code>activityId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deadlineAt` | property | <code>deadlineAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `fencingToken` | property | <code>fencingToken: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requestedAt` | property | <code>requestedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeCancelCommand`
+
+Runtime Cancel Command interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeCancelCommand } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeCancelCommand {
+    commandId: string;
+    scope: RuntimeScope;
+    principal: RuntimePrincipal;
+    ownerId: string;
+    leaseTtlMs: number;
+    reason: string;
+    policy: RuntimeCancellationPolicy;
+    requestedAt: string;
+    idempotencyKey?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `commandId` | property | <code>commandId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `leaseTtlMs` | property | <code>leaseTtlMs: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ownerId` | property | <code>ownerId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `policy` | property | <code>policy: RuntimeCancellationPolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: RuntimePrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requestedAt` | property | <code>requestedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeCancellationPolicy`
+
+Runtime Cancellation Policy interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeCancellationPolicy } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeCancellationPolicy {
+    propagation: RuntimeCancellationPropagation;
+    cancelRunningActivities: boolean;
+    waitGraceMs?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cancelRunningActivities` | property | <code>cancelRunningActivities: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `propagation` | property | <code>propagation: "none" &#124; "children" &#124; "all_descendants"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `waitGraceMs` | property | <code>waitGraceMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeCancellationTargetResult`
+
+Runtime Cancellation Target Result interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeCancellationTargetResult } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeCancellationTargetResult {
+    targetType: RuntimeCancellationTargetType;
+    targetId: string;
+    status: RuntimeCancellationTargetStatus;
+    error?: NormalizedRuntimeError;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `error` | property | <code>error?: NormalizedRuntimeError</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status: "cancelled" &#124; "failed" &#124; "not_found" &#124; "already_terminal"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `targetId` | property | <code>targetId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `targetType` | property | <code>targetType: "activity" &#124; "child_run" &#124; "session_command"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeCancelResult`
+
+Runtime Cancel Result interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeCancelResult } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeCancelResult {
+    commandId: string;
+    disposition: RuntimeCancellationDisposition;
+    eventIds: string[];
+    targetResults: RuntimeCancellationTargetResult[];
+    unresolvedActivityIds: string[];
+    projection: RuntimeOrchestrationProjection;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `commandId` | property | <code>commandId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `disposition` | property | <code>disposition: "applied" &#124; "reused"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `eventIds` | property | <code>eventIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `projection` | property | <code>projection: RuntimeOrchestrationProjection</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `targetResults` | property | <code>targetResults: RuntimeCancellationTargetResult[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `unresolvedActivityIds` | property | <code>unresolvedActivityIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeChildRunCancellationPort`
+
+Runtime Child Run Cancellation Port interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeChildRunCancellationPort } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeChildRunCancellationPort {
+    listChildren(request: RuntimeChildRunListRequest): Promise<RuntimeChildRunReference[]>;
+    cancel(request: RuntimeChildRunCancellationRequest): Promise<RuntimeCancellationTargetResult>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cancel` | method | <code>cancel(request: RuntimeChildRunCancellationRequest): Promise&lt;RuntimeCancellationTargetResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `listChildren` | method | <code>listChildren(request: RuntimeChildRunListRequest): Promise&lt;RuntimeChildRunReference[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `RuntimeChildRunCancellationRequest`
+
+Runtime Child Run Cancellation Request interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeChildRunCancellationRequest } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeChildRunCancellationRequest {
+    parentScope: RuntimeScope;
+    childRunId: string;
+    reason: string;
+    propagation: Exclude<RuntimeCancellationPropagation, 'none'>;
+    requestedAt: string;
+    deadlineAt?: string;
+    fencingToken: number;
+    idempotencyKey: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `childRunId` | property | <code>childRunId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deadlineAt` | property | <code>deadlineAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `fencingToken` | property | <code>fencingToken: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `parentScope` | property | <code>parentScope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `propagation` | property | <code>propagation: "children" &#124; "all_descendants"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requestedAt` | property | <code>requestedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeChildRunListRequest`
+
+Runtime Child Run List Request interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeChildRunListRequest } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeChildRunListRequest {
+    scope: RuntimeScope;
+    requestedAt: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `requestedAt` | property | <code>requestedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: RuntimeScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeChildRunReference`
+
+Runtime Child Run Reference interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RuntimeChildRunReference } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export interface RuntimeChildRunReference {
+    runId: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RuntimeCancellationDisposition`
+
+Public type alias for Runtime Cancellation Disposition; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { RuntimeCancellationDisposition } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export type RuntimeCancellationDisposition = (typeof RUNTIME_CANCELLATION_DISPOSITIONS)[number];
+```
+
+## `RuntimeCancellationPropagation`
+
+Public type alias for Runtime Cancellation Propagation; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { RuntimeCancellationPropagation } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export type RuntimeCancellationPropagation = (typeof RUNTIME_CANCELLATION_PROPAGATIONS)[number];
+```
+
+## `RuntimeCancellationTargetStatus`
+
+Public type alias for Runtime Cancellation Target Status; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { RuntimeCancellationTargetStatus } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export type RuntimeCancellationTargetStatus = (typeof RUNTIME_CANCELLATION_TARGET_STATUSES)[number];
+```
+
+## `RuntimeCancellationTargetType`
+
+Public type alias for Runtime Cancellation Target Type; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { RuntimeCancellationTargetType } from '@codesoul-co/hypha-core';`
+- Source module: [`contracts/runtime-cancellation`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-cancellation.ts)
+
+### Declaration
+
+```text
+export type RuntimeCancellationTargetType = (typeof RUNTIME_CANCELLATION_TARGET_TYPES)[number];
+```

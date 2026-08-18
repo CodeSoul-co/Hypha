@@ -1,251 +1,715 @@
 # `@codesoul-co/hypha-memory` / `retrieval`
 
 - 包索引: [`@codesoul-co/hypha-memory`](/zh/api/memory)
-- 模块指南: [学习与组合说明](/zh/packages/memory)
 - 源码: [`packages/memory/src/retrieval.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
 - 导出数: **20**
+
+## 模块用法
+
+用于使用该功能边界的公共契约与操作。Retrieval 模块公开 4 类、1 函数、14 接口、1 类型。
+
+### 从包入口导入
+
+```ts
+import {
+  DefaultMemoryRetrievalPipeline,
+  DenseMemoryCandidateGenerator,
+  KeywordMemoryCandidateGenerator,
+  StructuredMemoryCandidateGenerator,
+  normalizeMemoryQuery,
+} from '@codesoul-co/hypha-memory';
+
+import type {
+  DefaultMemoryRetrievalPipelineOptions,
+  DenseMemoryCandidateGeneratorOptions,
+  MemoryCandidate,
+  MemoryCandidateGenerationRequest,
+  MemoryCandidateGenerator,
+  MemoryMatchedFragment,
+  MemoryRankingPolicySpecV2,
+  MemoryRetrievalExplanation,
+} from '@codesoul-co/hypha-memory';
+
+// 完整导出列表见下方。
+```
+
+### 使用要点
+
+- 15 个类型/接口用于应用代码、Adapter 或测试中的静态契约；请使用 `import type`，运行时不应依赖它们。
+- 4 个类提供可实例化的运行时实现；构造参数与公开方法在各自条目中完整列出。
+- 1 个函数是该模块的直接操作入口；每个 overload 的必需/可选参数与返回类型均在下方列出。
+
 
 ## 公共导出
 
 | Symbol | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `DefaultMemoryRetrievalPipeline` | 类 | <code>new DefaultMemoryRetrievalPipeline(options: DefaultMemoryRetrievalPipelineOptions): DefaultMemoryRetrievalPipeline</code> | Default Memory Retrieval Pipeline 的运行时实现；公开构造函数与成员见下表。 |
+| `DefaultMemoryRetrievalPipeline` | 类 | <code>new DefaultMemoryRetrievalPipeline(options: DefaultMemoryRetrievalPipelineOptions): DefaultMemoryRetrievalPipeline</code> | Default Memory Retrieval Pipeline 类，共公开 3 个构造函数或成员；精确签名见本条目的声明与成员表。 |
 | `DenseMemoryCandidateGenerator` | 类 | <code>new DenseMemoryCandidateGenerator(options: DenseMemoryCandidateGeneratorOptions): DenseMemoryCandidateGenerator</code> | Generates scope-fenced dense candidates from the configured vector projection. |
-| `KeywordMemoryCandidateGenerator` | 类 | <code>new KeywordMemoryCandidateGenerator(store: ManagedMemoryRecordStore): KeywordMemoryCandidateGenerator</code> | Keyword Memory Candidate Generator 的运行时实现；公开构造函数与成员见下表。 |
-| `StructuredMemoryCandidateGenerator` | 类 | <code>new StructuredMemoryCandidateGenerator(store: ManagedMemoryRecordStore): StructuredMemoryCandidateGenerator</code> | Structured Memory Candidate Generator 的运行时实现；公开构造函数与成员见下表。 |
-| `normalizeMemoryQuery` | 函数 | <code>normalizeMemoryQuery(input: Omit&lt;NormalizedMemoryQuery, "queryHash"&gt;): NormalizedMemoryQuery</code> | 规范化 Memory Query。 |
-| `DefaultMemoryRetrievalPipelineOptions` | 接口 | <code>interface DefaultMemoryRetrievalPipelineOptions</code> | Default Memory Retrieval Pipeline Options 的字段契约；完整字段见下表。 |
-| `DenseMemoryCandidateGeneratorOptions` | 接口 | <code>interface DenseMemoryCandidateGeneratorOptions</code> | Dense Memory Candidate Generator Options 的字段契约；完整字段见下表。 |
-| `MemoryCandidate` | 接口 | <code>interface MemoryCandidate</code> | Memory Candidate 的字段契约；完整字段见下表。 |
-| `MemoryCandidateGenerationRequest` | 接口 | <code>interface MemoryCandidateGenerationRequest</code> | Memory Candidate Generation Request 的字段契约；完整字段见下表。 |
-| `MemoryCandidateGenerator` | 接口 | <code>interface MemoryCandidateGenerator</code> | Memory Candidate Generator 的字段契约；完整字段见下表。 |
-| `MemoryMatchedFragment` | 接口 | <code>interface MemoryMatchedFragment</code> | Memory Matched Fragment 的字段契约；完整字段见下表。 |
-| `MemoryRankingPolicySpecV2` | 接口 | <code>interface MemoryRankingPolicySpecV2 extends MemoryRetrievalPolicySpec</code> | Memory Ranking Policy Spec V2 的字段契约；完整字段见下表。 |
-| `MemoryRetrievalExplanation` | 接口 | <code>interface MemoryRetrievalExplanation</code> | Memory Retrieval Explanation 的字段契约；完整字段见下表。 |
-| `MemoryRetrievalPipeline` | 接口 | <code>interface MemoryRetrievalPipeline</code> | Memory Retrieval Pipeline 的字段契约；完整字段见下表。 |
-| `MemoryRetrievalRequest` | 接口 | <code>interface MemoryRetrievalRequest</code> | Memory Retrieval Request 的字段契约；完整字段见下表。 |
-| `MemoryRetrievalResult` | 接口 | <code>interface MemoryRetrievalResult</code> | Memory Retrieval Result 的字段契约；完整字段见下表。 |
-| `MemoryRetrievalSnapshot` | 接口 | <code>interface MemoryRetrievalSnapshot</code> | Memory Retrieval Snapshot 的字段契约；完整字段见下表。 |
-| `MemorySearchFilterV2` | 接口 | <code>interface MemorySearchFilterV2 extends MemorySearchFilter</code> | Memory Search Filter V2 的字段契约；完整字段见下表。 |
-| `NormalizedMemoryQuery` | 接口 | <code>interface NormalizedMemoryQuery</code> | Normalized Memory Query 的字段契约；完整字段见下表。 |
-| `MemoryCandidateGeneratorType` | 类型 | <code>type MemoryCandidateGeneratorType = 'structured' &#124; 'keyword' &#124; 'dense' &#124; 'sparse' &#124; 'graph' &#124; 'recent' &#124; 'custom'</code> | Memory Candidate Generator Type 的公共类型别名。 |
+| `KeywordMemoryCandidateGenerator` | 类 | <code>new KeywordMemoryCandidateGenerator(store: ManagedMemoryRecordStore): KeywordMemoryCandidateGenerator</code> | Keyword Memory Candidate Generator 类，共公开 4 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `StructuredMemoryCandidateGenerator` | 类 | <code>new StructuredMemoryCandidateGenerator(store: ManagedMemoryRecordStore): StructuredMemoryCandidateGenerator</code> | Structured Memory Candidate Generator 类，共公开 4 个构造函数或成员；精确签名见本条目的声明与成员表。 |
+| `normalizeMemoryQuery` | 函数 | <code>normalizeMemoryQuery(input: Omit&lt;NormalizedMemoryQuery, "queryHash"&gt;): NormalizedMemoryQuery</code> | Normalize Memory Query 函数，提供 1 个公开调用签名；参数与返回类型见下表。 |
+| `DefaultMemoryRetrievalPipelineOptions` | 接口 | <code>interface DefaultMemoryRetrievalPipelineOptions</code> | Default Memory Retrieval Pipeline Options 接口，共包含 4 个公开字段或方法。 |
+| `DenseMemoryCandidateGeneratorOptions` | 接口 | <code>interface DenseMemoryCandidateGeneratorOptions</code> | Dense Memory Candidate Generator Options 接口，共包含 2 个公开字段或方法。 |
+| `MemoryCandidate` | 接口 | <code>interface MemoryCandidate</code> | Memory Candidate 接口，共包含 8 个公开字段或方法。 |
+| `MemoryCandidateGenerationRequest` | 接口 | <code>interface MemoryCandidateGenerationRequest</code> | Memory Candidate Generation Request 接口，共包含 3 个公开字段或方法。 |
+| `MemoryCandidateGenerator` | 接口 | <code>interface MemoryCandidateGenerator</code> | Memory Candidate Generator 接口，共包含 3 个公开字段或方法。 |
+| `MemoryMatchedFragment` | 接口 | <code>interface MemoryMatchedFragment</code> | Memory Matched Fragment 接口，共包含 5 个公开字段或方法。 |
+| `MemoryRankingPolicySpecV2` | 接口 | <code>interface MemoryRankingPolicySpecV2 extends MemoryRetrievalPolicySpec</code> | Memory Ranking Policy Spec V2 接口，共包含 19 个公开字段或方法。 |
+| `MemoryRetrievalExplanation` | 接口 | <code>interface MemoryRetrievalExplanation</code> | Memory Retrieval Explanation 接口，共包含 8 个公开字段或方法。 |
+| `MemoryRetrievalPipeline` | 接口 | <code>interface MemoryRetrievalPipeline</code> | Memory Retrieval Pipeline 接口，共包含 2 个公开字段或方法。 |
+| `MemoryRetrievalRequest` | 接口 | <code>interface MemoryRetrievalRequest</code> | Memory Retrieval Request 接口，共包含 7 个公开字段或方法。 |
+| `MemoryRetrievalResult` | 接口 | <code>interface MemoryRetrievalResult</code> | Memory Retrieval Result 接口，共包含 3 个公开字段或方法。 |
+| `MemoryRetrievalSnapshot` | 接口 | <code>interface MemoryRetrievalSnapshot</code> | Memory Retrieval Snapshot 接口，共包含 12 个公开字段或方法。 |
+| `MemorySearchFilterV2` | 接口 | <code>interface MemorySearchFilterV2 extends MemorySearchFilter</code> | Memory Search Filter V2 接口，共包含 25 个公开字段或方法。 |
+| `NormalizedMemoryQuery` | 接口 | <code>interface NormalizedMemoryQuery</code> | Normalized Memory Query 接口，共包含 12 个公开字段或方法。 |
+| `MemoryCandidateGeneratorType` | 类型 | <code>type MemoryCandidateGeneratorType = 'structured' &#124; 'keyword' &#124; 'dense' &#124; 'sparse' &#124; 'graph' &#124; 'recent' &#124; 'custom'</code> | Memory Candidate Generator Type 公共类型别名；完整类型表达式见声明。 |
 
-## `DefaultMemoryRetrievalPipeline` 公开成员
+## `DefaultMemoryRetrievalPipeline`
+
+Default Memory Retrieval Pipeline 类，共公开 3 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { DefaultMemoryRetrievalPipeline } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export declare class DefaultMemoryRetrievalPipeline implements MemoryRetrievalPipeline {
+    constructor(options: DefaultMemoryRetrievalPipelineOptions);
+    retrieve(request: MemoryRetrievalRequest): Promise<MemoryRetrievalResult>;
+    explain(snapshotId: string): Promise<MemoryRetrievalResult | null>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(options: DefaultMemoryRetrievalPipelineOptions): DefaultMemoryRetrievalPipeline</code> | 创建该类的实例。 |
-| `explain` | 方法 | <code>explain(snapshotId: string): Promise&lt;MemoryRetrievalResult &#124; null&gt;</code> | explain 的公开运行时操作。 |
-| `retrieve` | 方法 | <code>retrieve(request: MemoryRetrievalRequest): Promise&lt;MemoryRetrievalResult&gt;</code> | retrieve 的公开运行时操作。 |
+| `explain` | 方法 | <code>explain(snapshotId: string): Promise&lt;MemoryRetrievalResult &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `retrieve` | 方法 | <code>retrieve(request: MemoryRetrievalRequest): Promise&lt;MemoryRetrievalResult&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
 
-## `DenseMemoryCandidateGenerator` 公开成员
+## `DenseMemoryCandidateGenerator`
 
 Generates scope-fenced dense candidates from the configured vector projection.
+
+- 种类: 类
+- 导入: `import { DenseMemoryCandidateGenerator } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export declare class DenseMemoryCandidateGenerator implements MemoryCandidateGenerator {
+    readonly id: string;
+    readonly type: "dense";
+    constructor(options: DenseMemoryCandidateGeneratorOptions);
+    generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(options: DenseMemoryCandidateGeneratorOptions): DenseMemoryCandidateGenerator</code> | 创建该类的实例。 |
-| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | generate 的公开运行时操作。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `type` | 属性 | <code>type: "dense"</code> | type 字段。 |
+| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `id` | 属性 | <code>readonly id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `type` | 属性 | <code>readonly type: "dense"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `KeywordMemoryCandidateGenerator` 公开成员
+## `KeywordMemoryCandidateGenerator`
+
+Keyword Memory Candidate Generator 类，共公开 4 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { KeywordMemoryCandidateGenerator } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export declare class KeywordMemoryCandidateGenerator implements MemoryCandidateGenerator {
+    readonly id = "memory.generator.keyword";
+    readonly type: "keyword";
+    constructor(store: ManagedMemoryRecordStore);
+    generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(store: ManagedMemoryRecordStore): KeywordMemoryCandidateGenerator</code> | 创建该类的实例。 |
-| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | generate 的公开运行时操作。 |
-| `id` | 属性 | <code>id: "memory.generator.keyword"</code> | id 字段。 |
-| `type` | 属性 | <code>type: "keyword"</code> | type 字段。 |
+| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `id` | 属性 | <code>readonly id: "memory.generator.keyword"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `type` | 属性 | <code>readonly type: "keyword"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `StructuredMemoryCandidateGenerator` 公开成员
+## `StructuredMemoryCandidateGenerator`
+
+Structured Memory Candidate Generator 类，共公开 4 个构造函数或成员；精确签名见本条目的声明与成员表。
+
+- 种类: 类
+- 导入: `import { StructuredMemoryCandidateGenerator } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export declare class StructuredMemoryCandidateGenerator implements MemoryCandidateGenerator {
+    readonly id = "memory.generator.structured";
+    readonly type: "structured";
+    constructor(store: ManagedMemoryRecordStore);
+    generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]>;
+}
+```
+
+### 公开成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
 | `constructor` | 构造函数 | <code>(store: ManagedMemoryRecordStore): StructuredMemoryCandidateGenerator</code> | 创建该类的实例。 |
-| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | generate 的公开运行时操作。 |
-| `id` | 属性 | <code>id: "memory.generator.structured"</code> | id 字段。 |
-| `type` | 属性 | <code>type: "structured"</code> | type 字段。 |
+| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `id` | 属性 | <code>readonly id: "memory.generator.structured"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `type` | 属性 | <code>readonly type: "structured"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `DefaultMemoryRetrievalPipelineOptions` 契约字段
+## `normalizeMemoryQuery`
+
+Normalize Memory Query 函数，提供 1 个公开调用签名；参数与返回类型见下表。
+
+- 种类: 函数
+- 导入: `import { normalizeMemoryQuery } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export declare function normalizeMemoryQuery(input: Omit<NormalizedMemoryQuery, 'queryHash'>): NormalizedMemoryQuery;
+```
+
+### 调用签名
+
+```text
+normalizeMemoryQuery(input: Omit<NormalizedMemoryQuery, "queryHash">): NormalizedMemoryQuery
+```
+
+#### 参数
+
+| 参数 | 类型 | 必需 | 说明 |
+| --- | --- | --- | --- |
+| `input` | <code>Omit&lt;NormalizedMemoryQuery, "queryHash"&gt;</code> | 是 | 必需参数；接受的值由类型列定义。 |
+
+#### 返回值
+
+- 类型: `NormalizedMemoryQuery`
+- 说明: 返回值契约由上述类型定义。
+
+## `DefaultMemoryRetrievalPipelineOptions`
+
+Default Memory Retrieval Pipeline Options 接口，共包含 4 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { DefaultMemoryRetrievalPipelineOptions } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface DefaultMemoryRetrievalPipelineOptions {
+    recordStore: ManagedMemoryRecordStore;
+    generators: MemoryCandidateGenerator[];
+    rankingPolicy: MemoryRankingPolicySpecV2;
+    now?: () => string;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `generators` | 属性 | <code>generators: MemoryCandidateGenerator[]</code> | generators 字段。 |
-| `now` | 方法 | <code>now(): string</code> | now 的公开运行时操作。 |
-| `rankingPolicy` | 属性 | <code>rankingPolicy: MemoryRankingPolicySpecV2</code> | ranking Policy 字段。 |
-| `recordStore` | 属性 | <code>recordStore: ManagedMemoryRecordStore</code> | record Store 字段。 |
+| `generators` | 属性 | <code>generators: MemoryCandidateGenerator[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `now` | 方法 | <code>now?(): string</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `rankingPolicy` | 属性 | <code>rankingPolicy: MemoryRankingPolicySpecV2</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `recordStore` | 属性 | <code>recordStore: ManagedMemoryRecordStore</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `DenseMemoryCandidateGeneratorOptions` 契约字段
+## `DenseMemoryCandidateGeneratorOptions`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `embeddings` | 属性 | <code>embeddings: EmbeddingProvider</code> | embeddings 字段。 |
-| `store` | 属性 | <code>store: ManagedVectorStoreAdapter</code> | store 字段。 |
+Dense Memory Candidate Generator Options 接口，共包含 2 个公开字段或方法。
 
-## `MemoryCandidate` 契约字段
+- 种类: 接口
+- 导入: `import type { DenseMemoryCandidateGeneratorOptions } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `generatorId` | 属性 | <code>generatorId: string</code> | generator Id 字段。 |
-| `generatorType` | 属性 | <code>generatorType: MemoryCandidateGeneratorType</code> | generator Type 字段。 |
-| `matchedFields` | 属性 | <code>matchedFields: string[]</code> | matched Fields 字段。 |
-| `matchedFragments` | 属性 | <code>matchedFragments: MemoryMatchedFragment[]</code> | matched Fragments 字段。 |
-| `memoryId` | 属性 | <code>memoryId: string</code> | memory Id 字段。 |
-| `normalizedScore` | 属性 | <code>normalizedScore: number</code> | normalized Score 字段。 |
-| `rawScore` | 属性 | <code>rawScore: number</code> | raw Score 字段。 |
-| `reasons` | 属性 | <code>reasons: string[]</code> | reasons 字段。 |
+### 声明
 
-## `MemoryCandidateGenerationRequest` 契约字段
+```text
+export interface DenseMemoryCandidateGeneratorOptions {
+    store: ManagedVectorStoreAdapter;
+    embeddings: EmbeddingProvider;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `filter` | 属性 | <code>filter: MemorySearchFilterV2</code> | filter 字段。 |
-| `limit` | 属性 | <code>limit: number</code> | limit 字段。 |
-| `query` | 属性 | <code>query: NormalizedMemoryQuery</code> | query 字段。 |
+| `embeddings` | 属性 | <code>embeddings: EmbeddingProvider</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `store` | 属性 | <code>store: ManagedVectorStoreAdapter</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `MemoryCandidateGenerator` 契约字段
+## `MemoryCandidate`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | generate 的公开运行时操作。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `type` | 属性 | <code>type: MemoryCandidateGeneratorType</code> | type 字段。 |
+Memory Candidate 接口，共包含 8 个公开字段或方法。
 
-## `MemoryMatchedFragment` 契约字段
+- 种类: 接口
+- 导入: `import type { MemoryCandidate } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `end` | 属性 | <code>end: number</code> | end 字段。 |
-| `field` | 属性 | <code>field: string</code> | field 字段。 |
-| `fragmentHash` | 属性 | <code>fragmentHash: string</code> | fragment Hash 字段。 |
-| `start` | 属性 | <code>start: number</code> | start 字段。 |
-| `text` | 属性 | <code>text: string</code> | text 字段。 |
+### 声明
 
-## `MemoryRankingPolicySpecV2` 契约字段
+```text
+export interface MemoryCandidate {
+    memoryId: string;
+    generatorId: string;
+    generatorType?: MemoryCandidateGeneratorType;
+    rawScore?: number;
+    normalizedScore?: number;
+    matchedFields?: string[];
+    matchedFragments?: MemoryMatchedFragment[];
+    reasons?: string[];
+}
+```
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `confidenceWeight` | 属性 | <code>confidenceWeight: number</code> | confidence Weight 字段。 |
-| `conflictHandling` | 属性 | <code>conflictHandling: "include_marked" &#124; "prefer_latest" &#124; "prefer_verified" &#124; "exclude_conflicts"</code> | conflict Handling 字段。 |
-| `deduplication` | 属性 | <code>deduplication: "none" &#124; "id" &#124; "semantic" &#124; "hash"</code> | deduplication 字段。 |
-| `defaultMode` | 属性 | <code>defaultMode: "structured" &#124; "hybrid" &#124; "semantic" &#124; "keyword"</code> | default Mode 字段。 |
-| `defaultTopK` | 属性 | <code>defaultTopK: number</code> | default Top K 字段。 |
-| `diversity` | 属性 | <code>diversity: { method: "none" &#124; "mmr" &#124; "per_entity_cap" &#124; "per_source_cap"; lambda?: number; maxPerEntity?: number; maxPerSource?: number; }</code> | diversity 字段。 |
-| `freshnessHalfLifeSeconds` | 属性 | <code>freshnessHalfLifeSeconds: number</code> | freshness Half Life Seconds 字段。 |
-| `importanceWeight` | 属性 | <code>importanceWeight: number</code> | importance Weight 字段。 |
-| `maxCandidates` | 属性 | <code>maxCandidates: number</code> | max Candidates 字段。 |
-| `memoryTypePriority` | 属性 | <code>memoryTypePriority: Partial&lt;Record&lt;ManagedMemoryType, number&gt;&gt;</code> | memory Type Priority 字段。 |
-| `normalization` | 属性 | <code>normalization: "min_max" &#124; "z_score" &#124; "rank" &#124; "provider_normalized"</code> | normalization 字段。 |
-| `recencyWeight` | 属性 | <code>recencyWeight: number</code> | recency Weight 字段。 |
-| `reinforcementWeight` | 属性 | <code>reinforcementWeight: number</code> | reinforcement Weight 字段。 |
-| `rerank` | 属性 | <code>rerank: "none" &#124; "provider" &#124; "custom" &#124; "score_fusion"</code> | rerank 字段。 |
-| `scoreThreshold` | 属性 | <code>scoreThreshold: number</code> | score Threshold 字段。 |
-| `semanticDedupThreshold` | 属性 | <code>semanticDedupThreshold: number</code> | semantic Dedup Threshold 字段。 |
-| `sourcePriority` | 属性 | <code>sourcePriority: Partial&lt;Record&lt;"human_review" &#124; "artifact" &#124; "system" &#124; "derived" &#124; "user_message" &#124; "assistant_message" &#124; "tool_result" &#124; "workflow_state" &#124; "import", number&gt;&gt;</code> | source Priority 字段。 |
-| `stableTieBreak` | 属性 | <code>stableTieBreak: "memory_id" &#124; "updated_at_then_id" &#124; "created_at_then_id"</code> | stable Tie Break 字段。 |
-| `weights` | 属性 | <code>weights: { semantic?: number; keyword?: number; exact?: number; graph?: number; recency?: number; importance?: number; confidence?: number; authority?: number; verified?: number; reinforcement?: number; }</code> | weights 字段。 |
-
-## `MemoryRetrievalExplanation` 契约字段
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `componentScores` | 属性 | <code>componentScores: Record&lt;string, number&gt;</code> | component Scores 字段。 |
-| `conflictMarkers` | 属性 | <code>conflictMarkers: string[]</code> | conflict Markers 字段。 |
-| `filtersPassed` | 属性 | <code>filtersPassed: string[]</code> | filters Passed 字段。 |
-| `filtersRejected` | 属性 | <code>filtersRejected: string[]</code> | filters Rejected 字段。 |
-| `finalRank` | 属性 | <code>finalRank: number</code> | final Rank 字段。 |
-| `finalScore` | 属性 | <code>finalScore: number</code> | final Score 字段。 |
-| `memoryId` | 属性 | <code>memoryId: string</code> | memory Id 字段。 |
-| `selectedBecause` | 属性 | <code>selectedBecause: string[]</code> | selected Because 字段。 |
+| `generatorId` | 属性 | <code>generatorId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `generatorType` | 属性 | <code>generatorType?: MemoryCandidateGeneratorType</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `matchedFields` | 属性 | <code>matchedFields?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `matchedFragments` | 属性 | <code>matchedFragments?: MemoryMatchedFragment[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `memoryId` | 属性 | <code>memoryId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `normalizedScore` | 属性 | <code>normalizedScore?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `rawScore` | 属性 | <code>rawScore?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `reasons` | 属性 | <code>reasons?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `MemoryRetrievalPipeline` 契约字段
+## `MemoryCandidateGenerationRequest`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `explain` | 方法 | <code>explain(snapshotId: string): Promise&lt;MemoryRetrievalResult &#124; null&gt;</code> | explain 的公开运行时操作。 |
-| `retrieve` | 方法 | <code>retrieve(request: MemoryRetrievalRequest): Promise&lt;MemoryRetrievalResult&gt;</code> | retrieve 的公开运行时操作。 |
+Memory Candidate Generation Request 接口，共包含 3 个公开字段或方法。
 
-## `MemoryRetrievalRequest` 契约字段
+- 种类: 接口
+- 导入: `import type { MemoryCandidateGenerationRequest } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `filter` | 属性 | <code>filter: MemorySearchFilterV2</code> | filter 字段。 |
-| `includeInvalidated` | 属性 | <code>includeInvalidated: boolean</code> | include Invalidated 字段。 |
-| `includeSuperseded` | 属性 | <code>includeSuperseded: boolean</code> | include Superseded 字段。 |
-| `profileRef` | 属性 | <code>profileRef: MemoryContractSpecRef</code> | profile Ref 字段。 |
-| `query` | 属性 | <code>query: NormalizedMemoryQuery</code> | query 字段。 |
-| `scoreThreshold` | 属性 | <code>scoreThreshold: number</code> | score Threshold 字段。 |
-| `topK` | 属性 | <code>topK: number</code> | top K 字段。 |
+### 声明
 
-## `MemoryRetrievalResult` 契约字段
+```text
+export interface MemoryCandidateGenerationRequest {
+    query: NormalizedMemoryQuery;
+    filter?: MemorySearchFilterV2;
+    limit: number;
+}
+```
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `explanations` | 属性 | <code>explanations: MemoryRetrievalExplanation[]</code> | explanations 字段。 |
-| `results` | 属性 | <code>results: ManagedMemorySearchResult[]</code> | results 字段。 |
-| `snapshot` | 属性 | <code>snapshot: MemoryRetrievalSnapshot</code> | snapshot 字段。 |
-
-## `MemoryRetrievalSnapshot` 契约字段
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `candidateCount` | 属性 | <code>candidateCount: number</code> | candidate Count 字段。 |
-| `createdAt` | 属性 | <code>createdAt: string</code> | created At 字段。 |
-| `filterHash` | 属性 | <code>filterHash: string</code> | filter Hash 字段。 |
-| `generatorIds` | 属性 | <code>generatorIds: string[]</code> | generator Ids 字段。 |
-| `id` | 属性 | <code>id: string</code> | id 字段。 |
-| `operationId` | 属性 | <code>operationId: string</code> | operation Id 字段。 |
-| `profileRef` | 属性 | <code>profileRef: MemoryContractSpecRef</code> | profile Ref 字段。 |
-| `profileRevision` | 属性 | <code>profileRevision: string</code> | profile Revision 字段。 |
-| `queryHash` | 属性 | <code>queryHash: string</code> | query Hash 字段。 |
-| `rankingPolicyHash` | 属性 | <code>rankingPolicyHash: string</code> | ranking Policy Hash 字段。 |
-| `rerankerRef` | 属性 | <code>rerankerRef: MemoryContractSpecRef</code> | reranker Ref 字段。 |
-| `resultMemoryIds` | 属性 | <code>resultMemoryIds: string[]</code> | result Memory Ids 字段。 |
+| `filter` | 属性 | <code>filter?: MemorySearchFilterV2</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `limit` | 属性 | <code>limit: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `query` | 属性 | <code>query: NormalizedMemoryQuery</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
 
-## `MemorySearchFilterV2` 契约字段
+## `MemoryCandidateGenerator`
 
-| 成员 | 种类 | 签名 | 说明 |
-| --- | --- | --- | --- |
-| `authorities` | 属性 | <code>authorities: NonNullable&lt;"verified" &#124; "unverified" &#124; "user_asserted" &#124; "system_observed" &#124; "authoritative"&gt;[]</code> | authorities 字段。 |
-| `canonicalKeys` | 属性 | <code>canonicalKeys: string[]</code> | canonical Keys 字段。 |
-| `confidenceGte` | 属性 | <code>confidenceGte: number</code> | confidence Gte 字段。 |
-| `conflictFreeOnly` | 属性 | <code>conflictFreeOnly: boolean</code> | conflict Free Only 字段。 |
-| `createdAfter` | 属性 | <code>createdAfter: string</code> | created After 字段。 |
-| `createdBefore` | 属性 | <code>createdBefore: string</code> | created Before 字段。 |
-| `entityIds` | 属性 | <code>entityIds: string[]</code> | entity Ids 字段。 |
-| `excludeIds` | 属性 | <code>excludeIds: string[]</code> | exclude Ids 字段。 |
-| `excludeTags` | 属性 | <code>excludeTags: string[]</code> | exclude Tags 字段。 |
-| `expiresAfter` | 属性 | <code>expiresAfter: string</code> | expires After 字段。 |
-| `ids` | 属性 | <code>ids: string[]</code> | ids 字段。 |
-| `importanceGte` | 属性 | <code>importanceGte: number</code> | importance Gte 字段。 |
-| `legalHoldOnly` | 属性 | <code>legalHoldOnly: boolean</code> | legal Hold Only 字段。 |
-| `metadata` | 属性 | <code>metadata: Record&lt;string, unknown&gt;</code> | metadata 字段。 |
-| `relationTypes` | 属性 | <code>relationTypes: ("supports" &#124; "contradicts" &#124; "supersedes" &#124; "derived_from" &#124; "related_to" &#124; "same_as" &#124; "part_of")[]</code> | relation Types 字段。 |
-| `sourceTypes` | 属性 | <code>sourceTypes: ("human_review" &#124; "artifact" &#124; "system" &#124; "derived" &#124; "user_message" &#124; "assistant_message" &#124; "tool_result" &#124; "workflow_state" &#124; "import")[]</code> | source Types 字段。 |
-| `statuses` | 属性 | <code>statuses: MemoryStatus[]</code> | statuses 字段。 |
-| `tagsAll` | 属性 | <code>tagsAll: string[]</code> | tags All 字段。 |
-| `tagsAny` | 属性 | <code>tagsAny: string[]</code> | tags Any 字段。 |
-| `updatedAfter` | 属性 | <code>updatedAfter: string</code> | updated After 字段。 |
-| `validAt` | 属性 | <code>validAt: string</code> | valid At 字段。 |
-| `validFromBefore` | 属性 | <code>validFromBefore: string</code> | valid From Before 字段。 |
-| `validToAfter` | 属性 | <code>validToAfter: string</code> | valid To After 字段。 |
-| `verifiedOnly` | 属性 | <code>verifiedOnly: boolean</code> | verified Only 字段。 |
-| `visibility` | 属性 | <code>visibility: ("workspace" &#124; "session" &#124; "private" &#124; "shared" &#124; "tenant")[]</code> | visibility 字段。 |
+Memory Candidate Generator 接口，共包含 3 个公开字段或方法。
 
-## `NormalizedMemoryQuery` 契约字段
+- 种类: 接口
+- 导入: `import type { MemoryCandidateGenerator } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryCandidateGenerator {
+    readonly id: string;
+    readonly type: MemoryCandidateGeneratorType;
+    generate(request: MemoryCandidateGenerationRequest): Promise<MemoryCandidate[]>;
+}
+```
+
+### 契约成员
 
 | 成员 | 种类 | 签名 | 说明 |
 | --- | --- | --- | --- |
-| `entities` | 属性 | <code>entities: MemoryEntityRef[]</code> | entities 字段。 |
-| `mode` | 属性 | <code>mode: "structured" &#124; "hybrid" &#124; "semantic" &#124; "keyword" &#124; "graph"</code> | mode 字段。 |
-| `normalizedQuery` | 属性 | <code>normalizedQuery: string</code> | normalized Query 字段。 |
-| `operationId` | 属性 | <code>operationId: string</code> | operation Id 字段。 |
-| `principal` | 属性 | <code>principal: MemoryPrincipal</code> | principal 字段。 |
-| `profileRevision` | 属性 | <code>profileRevision: string</code> | profile Revision 字段。 |
-| `queryEmbedding` | 属性 | <code>queryEmbedding: number[]</code> | query Embedding 字段。 |
-| `queryHash` | 属性 | <code>queryHash: string</code> | query Hash 字段。 |
-| `rawQuery` | 属性 | <code>rawQuery: string</code> | raw Query 字段。 |
-| `requestedTypes` | 属性 | <code>requestedTypes: ManagedMemoryType[]</code> | requested Types 字段。 |
-| `scope` | 属性 | <code>scope: ManagedMemoryScope</code> | scope 字段。 |
-| `temporalIntent` | 属性 | <code>temporalIntent: { at?: string; from?: string; to?: string; }</code> | temporal Intent 字段。 |
+| `generate` | 方法 | <code>generate(request: MemoryCandidateGenerationRequest): Promise&lt;MemoryCandidate[]&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `id` | 属性 | <code>readonly id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `type` | 属性 | <code>readonly type: MemoryCandidateGeneratorType</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryMatchedFragment`
+
+Memory Matched Fragment 接口，共包含 5 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryMatchedFragment } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryMatchedFragment {
+    field: string;
+    text?: string;
+    start?: number;
+    end?: number;
+    fragmentHash?: string;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `end` | 属性 | <code>end?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `field` | 属性 | <code>field: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `fragmentHash` | 属性 | <code>fragmentHash?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `start` | 属性 | <code>start?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `text` | 属性 | <code>text?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRankingPolicySpecV2`
+
+Memory Ranking Policy Spec V2 接口，共包含 19 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRankingPolicySpecV2 } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryRankingPolicySpecV2 extends MemoryRetrievalPolicySpec {
+    normalization: 'min_max' | 'z_score' | 'rank' | 'provider_normalized';
+    weights: {
+        semantic?: number;
+        keyword?: number;
+        exact?: number;
+        graph?: number;
+        recency?: number;
+        importance?: number;
+        confidence?: number;
+        authority?: number;
+        verified?: number;
+        reinforcement?: number;
+    };
+    freshnessHalfLifeSeconds?: number;
+    diversity?: {
+        method: 'none' | 'mmr' | 'per_entity_cap' | 'per_source_cap';
+        lambda?: number;
+        maxPerEntity?: number;
+        maxPerSource?: number;
+    };
+    stableTieBreak: 'memory_id' | 'updated_at_then_id' | 'created_at_then_id';
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `confidenceWeight` | 属性 | <code>confidenceWeight?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `conflictHandling` | 属性 | <code>conflictHandling?: "include_marked" &#124; "prefer_latest" &#124; "prefer_verified" &#124; "exclude_conflicts"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `deduplication` | 属性 | <code>deduplication: "none" &#124; "id" &#124; "semantic" &#124; "hash"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `defaultMode` | 属性 | <code>defaultMode: "structured" &#124; "hybrid" &#124; "semantic" &#124; "keyword"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `defaultTopK` | 属性 | <code>defaultTopK: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `diversity` | 属性 | <code>diversity?: { method: "none" &#124; "mmr" &#124; "per_entity_cap" &#124; "per_source_cap"; lambda?: number; maxPerEntity?: number; maxPerSource?: number; }</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `freshnessHalfLifeSeconds` | 属性 | <code>freshnessHalfLifeSeconds?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `importanceWeight` | 属性 | <code>importanceWeight?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `maxCandidates` | 属性 | <code>maxCandidates: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `memoryTypePriority` | 属性 | <code>memoryTypePriority?: Partial&lt;Record&lt;ManagedMemoryType, number&gt;&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `normalization` | 属性 | <code>normalization: "min_max" &#124; "z_score" &#124; "rank" &#124; "provider_normalized"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `recencyWeight` | 属性 | <code>recencyWeight?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `reinforcementWeight` | 属性 | <code>reinforcementWeight?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `rerank` | 属性 | <code>rerank?: "none" &#124; "provider" &#124; "custom" &#124; "score_fusion"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `scoreThreshold` | 属性 | <code>scoreThreshold?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `semanticDedupThreshold` | 属性 | <code>semanticDedupThreshold?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `sourcePriority` | 属性 | <code>sourcePriority?: Partial&lt;Record&lt;"human_review" &#124; "artifact" &#124; "system" &#124; "derived" &#124; "user_message" &#124; "assistant_message" &#124; "tool_result" &#124; "workflow_state" &#124; "import", number&gt;&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `stableTieBreak` | 属性 | <code>stableTieBreak: "memory_id" &#124; "updated_at_then_id" &#124; "created_at_then_id"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `weights` | 属性 | <code>weights: { semantic?: number; keyword?: number; exact?: number; graph?: number; recency?: number; importance?: number; confidence?: number; authority?: number; verified?: number; reinforcement?: number; }</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRetrievalExplanation`
+
+Memory Retrieval Explanation 接口，共包含 8 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRetrievalExplanation } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryRetrievalExplanation {
+    memoryId: string;
+    finalRank: number;
+    finalScore: number;
+    componentScores: Record<string, number>;
+    filtersPassed: string[];
+    filtersRejected?: string[];
+    selectedBecause: string[];
+    conflictMarkers?: string[];
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `componentScores` | 属性 | <code>componentScores: Record&lt;string, number&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `conflictMarkers` | 属性 | <code>conflictMarkers?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `filtersPassed` | 属性 | <code>filtersPassed: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `filtersRejected` | 属性 | <code>filtersRejected?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `finalRank` | 属性 | <code>finalRank: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `finalScore` | 属性 | <code>finalScore: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `memoryId` | 属性 | <code>memoryId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `selectedBecause` | 属性 | <code>selectedBecause: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRetrievalPipeline`
+
+Memory Retrieval Pipeline 接口，共包含 2 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRetrievalPipeline } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryRetrievalPipeline {
+    retrieve(request: MemoryRetrievalRequest): Promise<MemoryRetrievalResult>;
+    explain(snapshotId: string): Promise<MemoryRetrievalResult | null>;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `explain` | 方法 | <code>explain(snapshotId: string): Promise&lt;MemoryRetrievalResult &#124; null&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+| `retrieve` | 方法 | <code>retrieve(request: MemoryRetrievalRequest): Promise&lt;MemoryRetrievalResult&gt;</code> | 公开方法；参数与返回类型以签名列为准。 |
+
+## `MemoryRetrievalRequest`
+
+Memory Retrieval Request 接口，共包含 7 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRetrievalRequest } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryRetrievalRequest {
+    query: NormalizedMemoryQuery;
+    profileRef: MemoryContractSpecRef;
+    filter?: MemorySearchFilterV2;
+    topK: number;
+    scoreThreshold?: number;
+    includeSuperseded?: boolean;
+    includeInvalidated?: boolean;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `filter` | 属性 | <code>filter?: MemorySearchFilterV2</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `includeInvalidated` | 属性 | <code>includeInvalidated?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `includeSuperseded` | 属性 | <code>includeSuperseded?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRef` | 属性 | <code>profileRef: MemoryContractSpecRef</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `query` | 属性 | <code>query: NormalizedMemoryQuery</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `scoreThreshold` | 属性 | <code>scoreThreshold?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `topK` | 属性 | <code>topK: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRetrievalResult`
+
+Memory Retrieval Result 接口，共包含 3 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRetrievalResult } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryRetrievalResult {
+    results: ManagedMemorySearchResult[];
+    snapshot: MemoryRetrievalSnapshot;
+    explanations: MemoryRetrievalExplanation[];
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `explanations` | 属性 | <code>explanations: MemoryRetrievalExplanation[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `results` | 属性 | <code>results: ManagedMemorySearchResult[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `snapshot` | 属性 | <code>snapshot: MemoryRetrievalSnapshot</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryRetrievalSnapshot`
+
+Memory Retrieval Snapshot 接口，共包含 12 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemoryRetrievalSnapshot } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemoryRetrievalSnapshot {
+    id: string;
+    operationId: string;
+    queryHash: string;
+    profileRef: MemoryContractSpecRef;
+    profileRevision: string;
+    filterHash: string;
+    generatorIds: string[];
+    candidateCount: number;
+    rankingPolicyHash: string;
+    rerankerRef?: MemoryContractSpecRef;
+    resultMemoryIds: string[];
+    createdAt: string;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `candidateCount` | 属性 | <code>candidateCount: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `createdAt` | 属性 | <code>createdAt: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `filterHash` | 属性 | <code>filterHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `generatorIds` | 属性 | <code>generatorIds: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `id` | 属性 | <code>id: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `operationId` | 属性 | <code>operationId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRef` | 属性 | <code>profileRef: MemoryContractSpecRef</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRevision` | 属性 | <code>profileRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `queryHash` | 属性 | <code>queryHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `rankingPolicyHash` | 属性 | <code>rankingPolicyHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `rerankerRef` | 属性 | <code>rerankerRef?: MemoryContractSpecRef</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `resultMemoryIds` | 属性 | <code>resultMemoryIds: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemorySearchFilterV2`
+
+Memory Search Filter V2 接口，共包含 25 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { MemorySearchFilterV2 } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface MemorySearchFilterV2 extends MemorySearchFilter {
+    excludeTags?: string[];
+    authorities?: NonNullable<MemoryExtractionSourceRef['authority']>[];
+    validAt?: string;
+    validFromBefore?: string;
+    validToAfter?: string;
+    relationTypes?: MemoryRelation['type'][];
+    legalHoldOnly?: boolean;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `authorities` | 属性 | <code>authorities?: NonNullable&lt;"verified" &#124; "unverified" &#124; "user_asserted" &#124; "system_observed" &#124; "authoritative"&gt;[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `canonicalKeys` | 属性 | <code>canonicalKeys?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `confidenceGte` | 属性 | <code>confidenceGte?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `conflictFreeOnly` | 属性 | <code>conflictFreeOnly?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `createdAfter` | 属性 | <code>createdAfter?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `createdBefore` | 属性 | <code>createdBefore?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `entityIds` | 属性 | <code>entityIds?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `excludeIds` | 属性 | <code>excludeIds?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `excludeTags` | 属性 | <code>excludeTags?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `expiresAfter` | 属性 | <code>expiresAfter?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `ids` | 属性 | <code>ids?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `importanceGte` | 属性 | <code>importanceGte?: number</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `legalHoldOnly` | 属性 | <code>legalHoldOnly?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `metadata` | 属性 | <code>metadata?: Record&lt;string, unknown&gt;</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `relationTypes` | 属性 | <code>relationTypes?: ("supports" &#124; "contradicts" &#124; "supersedes" &#124; "derived_from" &#124; "related_to" &#124; "same_as" &#124; "part_of")[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `sourceTypes` | 属性 | <code>sourceTypes?: ("human_review" &#124; "artifact" &#124; "system" &#124; "derived" &#124; "user_message" &#124; "assistant_message" &#124; "tool_result" &#124; "workflow_state" &#124; "import")[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `statuses` | 属性 | <code>statuses?: MemoryStatus[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `tagsAll` | 属性 | <code>tagsAll?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `tagsAny` | 属性 | <code>tagsAny?: string[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `updatedAfter` | 属性 | <code>updatedAfter?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `validAt` | 属性 | <code>validAt?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `validFromBefore` | 属性 | <code>validFromBefore?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `validToAfter` | 属性 | <code>validToAfter?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `verifiedOnly` | 属性 | <code>verifiedOnly?: boolean</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `visibility` | 属性 | <code>visibility?: ("workspace" &#124; "session" &#124; "private" &#124; "shared" &#124; "tenant")[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `NormalizedMemoryQuery`
+
+Normalized Memory Query 接口，共包含 12 个公开字段或方法。
+
+- 种类: 接口
+- 导入: `import type { NormalizedMemoryQuery } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export interface NormalizedMemoryQuery {
+    operationId: string;
+    scope: ManagedMemoryScope;
+    principal: MemoryPrincipal;
+    rawQuery?: string;
+    normalizedQuery?: string;
+    queryEmbedding?: number[];
+    entities?: MemoryEntityRef[];
+    temporalIntent?: {
+        at?: string;
+        from?: string;
+        to?: string;
+    };
+    requestedTypes?: ManagedMemoryType[];
+    mode?: 'structured' | 'semantic' | 'keyword' | 'hybrid' | 'graph';
+    profileRevision: string;
+    queryHash: string;
+}
+```
+
+### 契约成员
+
+| 成员 | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `entities` | 属性 | <code>entities?: MemoryEntityRef[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `mode` | 属性 | <code>mode?: "structured" &#124; "hybrid" &#124; "semantic" &#124; "keyword" &#124; "graph"</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `normalizedQuery` | 属性 | <code>normalizedQuery?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `operationId` | 属性 | <code>operationId: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `principal` | 属性 | <code>principal: MemoryPrincipal</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `profileRevision` | 属性 | <code>profileRevision: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `queryEmbedding` | 属性 | <code>queryEmbedding?: number[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `queryHash` | 属性 | <code>queryHash: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `rawQuery` | 属性 | <code>rawQuery?: string</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `requestedTypes` | 属性 | <code>requestedTypes?: ManagedMemoryType[]</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `scope` | 属性 | <code>scope: ManagedMemoryScope</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+| `temporalIntent` | 属性 | <code>temporalIntent?: { at?: string; from?: string; to?: string; }</code> | 公开属性；类型、只读和可选状态以签名列为准。 |
+
+## `MemoryCandidateGeneratorType`
+
+Memory Candidate Generator Type 公共类型别名；完整类型表达式见声明。
+
+- 种类: 类型
+- 导入: `import type { MemoryCandidateGeneratorType } from '@codesoul-co/hypha-memory';`
+- 源码模块: [`retrieval`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/retrieval.ts)
+
+### 声明
+
+```text
+export type MemoryCandidateGeneratorType = 'structured' | 'keyword' | 'dense' | 'sparse' | 'graph' | 'recent' | 'custom';
+```

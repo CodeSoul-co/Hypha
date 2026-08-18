@@ -556,7 +556,6 @@ NODE_ENV=production npm start
 Hypha v1.0.1 publishes 15 version-aligned npm libraries. Pin the exact same version across the
 dependency graph. The root workspace, bundled Server, CLI, and any package marked private remain
 source/deployment surfaces. See the [VitePress package reference](https://codesoul-co.github.io/Hypha/packages/),
-[Development Workflow](docs/guides/development-workflow.md),
 [Releases and npm Packages](docs/guides/releases.md), and [Upgrading](UPGRADING.md).
 
 | Package                                                                           | Responsibility                                                                                |
@@ -576,8 +575,7 @@ source/deployment surfaces. See the [VitePress package reference](https://codeso
 ## Documentation
 
 - [Bilingual VitePress guide](https://codesoul-co.github.io/Hypha/)
-- [Feature-by-feature map](https://codesoul-co.github.io/Hypha/guide/capability-map)
-- [Complete module/class/function API](https://codesoul-co.github.io/Hypha/api/)
+- [Complete API reference by package, module, class, function, type, and constant](https://codesoul-co.github.io/Hypha/api/)
 - [Seven isolated feature examples and full-system example](https://codesoul-co.github.io/Hypha/guide/examples)
 - [Official website](https://hypha.code-soul.com/)
 - [Documentation index](docs/README.md)

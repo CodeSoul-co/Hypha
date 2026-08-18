@@ -1,139 +1,442 @@
 # `@codesoul-co/hypha-inference` / `drivers`
 
 - Package index: [`@codesoul-co/hypha-inference`](/api/inference)
-- Package guide: [learning and composition guide](/packages/inference)
 - Source: [`packages/inference/src/drivers.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
 - Exports: **14**
+
+## Using this module
+
+Use the Drivers module for using the public contracts and operations for this capability boundary. It exports 3 classes, 7 interfaces, 4 types.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  HttpLocalInferenceDriver,
+  LocalInferenceDriverRegistry,
+  NodeLocalInferenceProcessSupervisor,
+} from '@codesoul-co/hypha-inference';
+
+import type {
+  LocalInferenceDriver,
+  LocalInferenceDriverConfig,
+  LocalInferenceDriverStatus,
+  LocalInferenceHealthProbeRequest,
+  LocalInferenceProcessHandle,
+  LocalInferenceProcessSpec,
+  LocalInferenceProcessSupervisor,
+  LocalInferenceDriverMode,
+} from '@codesoul-co/hypha-inference';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 11 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 3 classes as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `HttpLocalInferenceDriver` | class | <code>new HttpLocalInferenceDriver(config: LocalInferenceDriverConfig, supervisor?: LocalInferenceProcessSupervisor, healthProbe?: LocalInferenceHealthProbe): HttpLocalInferenceDriver</code> | Runtime implementation for Http Local Inference Driver; see its public constructor and members below. |
-| `LocalInferenceDriverRegistry` | class | <code>new LocalInferenceDriverRegistry(): LocalInferenceDriverRegistry</code> | Runtime implementation for Local Inference Driver Registry; see its public constructor and members below. |
-| `NodeLocalInferenceProcessSupervisor` | class | <code>new NodeLocalInferenceProcessSupervisor(): NodeLocalInferenceProcessSupervisor</code> | Runtime implementation for Node Local Inference Process Supervisor; see its public constructor and members below. |
-| `LocalInferenceDriver` | interface | <code>interface LocalInferenceDriver</code> | Field contract for Local Inference Driver; see all contract members below. |
-| `LocalInferenceDriverConfig` | interface | <code>interface LocalInferenceDriverConfig</code> | Field contract for Local Inference Driver Config; see all contract members below. |
-| `LocalInferenceDriverStatus` | interface | <code>interface LocalInferenceDriverStatus</code> | Field contract for Local Inference Driver Status; see all contract members below. |
-| `LocalInferenceHealthProbeRequest` | interface | <code>interface LocalInferenceHealthProbeRequest</code> | Field contract for Local Inference Health Probe Request; see all contract members below. |
-| `LocalInferenceProcessHandle` | interface | <code>interface LocalInferenceProcessHandle</code> | Field contract for Local Inference Process Handle; see all contract members below. |
-| `LocalInferenceProcessSpec` | interface | <code>interface LocalInferenceProcessSpec</code> | Field contract for Local Inference Process Spec; see all contract members below. |
-| `LocalInferenceProcessSupervisor` | interface | <code>interface LocalInferenceProcessSupervisor</code> | Field contract for Local Inference Process Supervisor; see all contract members below. |
-| `LocalInferenceDriverMode` | type | <code>type LocalInferenceDriverMode = 'connect' &#124; 'managed'</code> | Public type alias for Local Inference Driver Mode. |
-| `LocalInferenceDriverState` | type | <code>type LocalInferenceDriverState = 'idle' &#124; 'starting' &#124; 'ready' &#124; 'stopping' &#124; 'stopped' &#124; 'failed'</code> | Public type alias for Local Inference Driver State. |
-| `LocalInferenceEngineKind` | type | <code>type LocalInferenceEngineKind = 'ollama' &#124; 'sglang' &#124; 'vllm'</code> | Public type alias for Local Inference Engine Kind. |
-| `LocalInferenceHealthProbe` | type | <code>type LocalInferenceHealthProbe = (request: LocalInferenceHealthProbeRequest) =&gt; Promise&lt;boolean&gt;</code> | Public type alias for Local Inference Health Probe. |
+| `HttpLocalInferenceDriver` | class | <code>new HttpLocalInferenceDriver(config: LocalInferenceDriverConfig, supervisor?: LocalInferenceProcessSupervisor, healthProbe?: LocalInferenceHealthProbe): HttpLocalInferenceDriver</code> | Http Local Inference Driver class with 10 public constructor or member entries; its exact declarations are listed below. |
+| `LocalInferenceDriverRegistry` | class | <code>new LocalInferenceDriverRegistry(): LocalInferenceDriverRegistry</code> | Local Inference Driver Registry class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `NodeLocalInferenceProcessSupervisor` | class | <code>new NodeLocalInferenceProcessSupervisor(): NodeLocalInferenceProcessSupervisor</code> | Node Local Inference Process Supervisor class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `LocalInferenceDriver` | interface | <code>interface LocalInferenceDriver</code> | Local Inference Driver interface with 9 public fields or methods. |
+| `LocalInferenceDriverConfig` | interface | <code>interface LocalInferenceDriverConfig</code> | Local Inference Driver Config interface with 17 public fields or methods. |
+| `LocalInferenceDriverStatus` | interface | <code>interface LocalInferenceDriverStatus</code> | Local Inference Driver Status interface with 9 public fields or methods. |
+| `LocalInferenceHealthProbeRequest` | interface | <code>interface LocalInferenceHealthProbeRequest</code> | Local Inference Health Probe Request interface with 3 public fields or methods. |
+| `LocalInferenceProcessHandle` | interface | <code>interface LocalInferenceProcessHandle</code> | Local Inference Process Handle interface with 3 public fields or methods. |
+| `LocalInferenceProcessSpec` | interface | <code>interface LocalInferenceProcessSpec</code> | Local Inference Process Spec interface with 4 public fields or methods. |
+| `LocalInferenceProcessSupervisor` | interface | <code>interface LocalInferenceProcessSupervisor</code> | Local Inference Process Supervisor interface with 1 public fields or methods. |
+| `LocalInferenceDriverMode` | type | <code>type LocalInferenceDriverMode = 'connect' &#124; 'managed'</code> | Public type alias for Local Inference Driver Mode; the declaration contains its complete type expression. |
+| `LocalInferenceDriverState` | type | <code>type LocalInferenceDriverState = 'idle' &#124; 'starting' &#124; 'ready' &#124; 'stopping' &#124; 'stopped' &#124; 'failed'</code> | Public type alias for Local Inference Driver State; the declaration contains its complete type expression. |
+| `LocalInferenceEngineKind` | type | <code>type LocalInferenceEngineKind = 'ollama' &#124; 'sglang' &#124; 'vllm'</code> | Public type alias for Local Inference Engine Kind; the declaration contains its complete type expression. |
+| `LocalInferenceHealthProbe` | type | <code>type LocalInferenceHealthProbe = (request: LocalInferenceHealthProbeRequest) =&gt; Promise&lt;boolean&gt;</code> | Public type alias for Local Inference Health Probe; the declaration contains its complete type expression. |
 
-## `HttpLocalInferenceDriver` public members
+## `HttpLocalInferenceDriver`
+
+Http Local Inference Driver class with 10 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { HttpLocalInferenceDriver } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export declare class HttpLocalInferenceDriver implements LocalInferenceDriver {
+    readonly id: string;
+    readonly kind: LocalInferenceEngineKind;
+    constructor(config: LocalInferenceDriverConfig, supervisor?: LocalInferenceProcessSupervisor, healthProbe?: LocalInferenceHealthProbe);
+    start(model?: string | undefined): Promise<LocalInferenceDriverStatus>;
+    load(model: string): Promise<LocalInferenceDriverStatus>;
+    unload(model?: string | undefined): Promise<LocalInferenceDriverStatus>;
+    stop(): Promise<LocalInferenceDriverStatus>;
+    health(): Promise<boolean>;
+    status(): LocalInferenceDriverStatus;
+    backend(): InferenceBackend;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `backend` | method | <code>backend(): InferenceBackend</code> | Public runtime operation for backend. |
+| `backend` | method | <code>backend(): InferenceBackend</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(config: LocalInferenceDriverConfig, supervisor?: LocalInferenceProcessSupervisor, healthProbe?: LocalInferenceHealthProbe): HttpLocalInferenceDriver</code> | Creates an instance of this class. |
-| `health` | method | <code>health(): Promise&lt;boolean&gt;</code> | Public runtime operation for health. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `kind` | property | <code>kind: LocalInferenceEngineKind</code> | Public kind property. |
-| `load` | method | <code>load(model: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Loads load at this module boundary. |
-| `start` | method | <code>start(model?: string &#124; undefined): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Starts start at this module boundary. |
-| `status` | method | <code>status(): LocalInferenceDriverStatus</code> | Public runtime operation for status. |
-| `stop` | method | <code>stop(): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public runtime operation for stop. |
-| `unload` | method | <code>unload(model?: string &#124; undefined): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public runtime operation for unload. |
+| `health` | method | <code>health(): Promise&lt;boolean&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>readonly kind: LocalInferenceEngineKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `load` | method | <code>load(model: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `start` | method | <code>start(model?: string &#124; undefined): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `status` | method | <code>status(): LocalInferenceDriverStatus</code> | Public method; parameters and return type are shown in the signature. |
+| `stop` | method | <code>stop(): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `unload` | method | <code>unload(model?: string &#124; undefined): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `LocalInferenceDriverRegistry` public members
+## `LocalInferenceDriverRegistry`
+
+Local Inference Driver Registry class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { LocalInferenceDriverRegistry } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export declare class LocalInferenceDriverRegistry {
+    register(driver: LocalInferenceDriver): void;
+    get(id: string): LocalInferenceDriver | null;
+    require(id: string): LocalInferenceDriver;
+    list(): LocalInferenceDriver[];
+    stopAll(): Promise<void>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(): LocalInferenceDriverRegistry</code> | Creates an instance of this class. |
-| `get` | method | <code>get(id: string): LocalInferenceDriver &#124; null</code> | Gets get at this module boundary. |
-| `list` | method | <code>list(): LocalInferenceDriver[]</code> | Lists list at this module boundary. |
-| `register` | method | <code>register(driver: LocalInferenceDriver): void</code> | Registers register at this module boundary. |
-| `require` | method | <code>require(id: string): LocalInferenceDriver</code> | Public runtime operation for require. |
-| `stopAll` | method | <code>stopAll(): Promise&lt;void&gt;</code> | Public runtime operation for stop All. |
+| `get` | method | <code>get(id: string): LocalInferenceDriver &#124; null</code> | Public method; parameters and return type are shown in the signature. |
+| `list` | method | <code>list(): LocalInferenceDriver[]</code> | Public method; parameters and return type are shown in the signature. |
+| `register` | method | <code>register(driver: LocalInferenceDriver): void</code> | Public method; parameters and return type are shown in the signature. |
+| `require` | method | <code>require(id: string): LocalInferenceDriver</code> | Public method; parameters and return type are shown in the signature. |
+| `stopAll` | method | <code>stopAll(): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `NodeLocalInferenceProcessSupervisor` public members
+## `NodeLocalInferenceProcessSupervisor`
+
+Node Local Inference Process Supervisor class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { NodeLocalInferenceProcessSupervisor } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export declare class NodeLocalInferenceProcessSupervisor implements LocalInferenceProcessSupervisor {
+    start(spec: LocalInferenceProcessSpec): Promise<LocalInferenceProcessHandle>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(): NodeLocalInferenceProcessSupervisor</code> | Creates an instance of this class. |
-| `start` | method | <code>start(spec: LocalInferenceProcessSpec): Promise&lt;LocalInferenceProcessHandle&gt;</code> | Starts start at this module boundary. |
+| `start` | method | <code>start(spec: LocalInferenceProcessSpec): Promise&lt;LocalInferenceProcessHandle&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `LocalInferenceDriver` contract members
+## `LocalInferenceDriver`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `backend` | method | <code>backend(): InferenceBackend</code> | Public runtime operation for backend. |
-| `health` | method | <code>health(): Promise&lt;boolean&gt;</code> | Public runtime operation for health. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `kind` | property | <code>kind: LocalInferenceEngineKind</code> | Public kind property. |
-| `load` | method | <code>load(model: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Loads load at this module boundary. |
-| `start` | method | <code>start(model?: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Starts start at this module boundary. |
-| `status` | method | <code>status(): LocalInferenceDriverStatus</code> | Public runtime operation for status. |
-| `stop` | method | <code>stop(): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public runtime operation for stop. |
-| `unload` | method | <code>unload(model?: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public runtime operation for unload. |
+Local Inference Driver interface with 9 public fields or methods.
 
-## `LocalInferenceDriverConfig` contract members
+- Kind: interface
+- Import: `import type { LocalInferenceDriver } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `apiKey` | property | <code>apiKey: string</code> | Public api Key property. |
-| `apiKeyEnv` | property | <code>apiKeyEnv: string</code> | Public api Key Env property. |
-| `args` | property | <code>args: string[]</code> | Public args property. |
-| `baseUrl` | property | <code>baseUrl: string</code> | Public base Url property. |
-| `command` | property | <code>command: string</code> | Public command property. |
-| `cwd` | property | <code>cwd: string</code> | Public cwd property. |
-| `endpoint` | property | <code>endpoint: string</code> | Public endpoint property. |
-| `env` | property | <code>env: Record&lt;string, string&gt;</code> | Public env property. |
-| `healthPollMs` | property | <code>healthPollMs: number</code> | Public health Poll Ms property. |
-| `host` | property | <code>host: string</code> | Public host property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `kind` | property | <code>kind: LocalInferenceEngineKind</code> | Public kind property. |
-| `mode` | property | <code>mode: LocalInferenceDriverMode</code> | Public mode property. |
-| `model` | property | <code>model: string</code> | Public model property. |
-| `port` | property | <code>port: number</code> | Public port property. |
-| `requestTimeoutMs` | property | <code>requestTimeoutMs: number</code> | Public request Timeout Ms property. |
-| `startupTimeoutMs` | property | <code>startupTimeoutMs: number</code> | Public startup Timeout Ms property. |
+### Declaration
 
-## `LocalInferenceDriverStatus` contract members
+```text
+export interface LocalInferenceDriver {
+    readonly id: string;
+    readonly kind: LocalInferenceEngineKind;
+    start(model?: string): Promise<LocalInferenceDriverStatus>;
+    load(model: string): Promise<LocalInferenceDriverStatus>;
+    unload(model?: string): Promise<LocalInferenceDriverStatus>;
+    stop(): Promise<LocalInferenceDriverStatus>;
+    health(): Promise<boolean>;
+    status(): LocalInferenceDriverStatus;
+    backend(): InferenceBackend;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `baseUrl` | property | <code>baseUrl: string</code> | Public base Url property. |
-| `error` | property | <code>error: string</code> | Public error property. |
-| `healthy` | property | <code>healthy: boolean</code> | Public healthy property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `kind` | property | <code>kind: LocalInferenceEngineKind</code> | Public kind property. |
-| `mode` | property | <code>mode: LocalInferenceDriverMode</code> | Public mode property. |
-| `model` | property | <code>model: string</code> | Public model property. |
-| `pid` | property | <code>pid: number</code> | Public pid property. |
-| `state` | property | <code>state: LocalInferenceDriverState</code> | Public state property. |
+| `backend` | method | <code>backend(): InferenceBackend</code> | Public method; parameters and return type are shown in the signature. |
+| `health` | method | <code>health(): Promise&lt;boolean&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>readonly kind: LocalInferenceEngineKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `load` | method | <code>load(model: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `start` | method | <code>start(model?: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `status` | method | <code>status(): LocalInferenceDriverStatus</code> | Public method; parameters and return type are shown in the signature. |
+| `stop` | method | <code>stop(): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `unload` | method | <code>unload(model?: string): Promise&lt;LocalInferenceDriverStatus&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `LocalInferenceHealthProbeRequest` contract members
+## `LocalInferenceDriverConfig`
+
+Local Inference Driver Config interface with 17 public fields or methods.
+
+- Kind: interface
+- Import: `import type { LocalInferenceDriverConfig } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export interface LocalInferenceDriverConfig {
+    id?: string;
+    kind: LocalInferenceEngineKind;
+    mode?: LocalInferenceDriverMode;
+    baseUrl?: string;
+    endpoint?: string;
+    model?: string;
+    host?: string;
+    port?: number;
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+    startupTimeoutMs?: number;
+    healthPollMs?: number;
+    requestTimeoutMs?: number;
+    apiKey?: string;
+    apiKeyEnv?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `headers` | property | <code>headers: Record&lt;string, string&gt;</code> | Public headers property. |
-| `timeoutMs` | property | <code>timeoutMs: number</code> | Public timeout Ms property. |
-| `url` | property | <code>url: string</code> | Public url property. |
+| `apiKey` | property | <code>apiKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `apiKeyEnv` | property | <code>apiKeyEnv?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `args` | property | <code>args?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `baseUrl` | property | <code>baseUrl?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `command` | property | <code>command?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cwd` | property | <code>cwd?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `endpoint` | property | <code>endpoint?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `env` | property | <code>env?: Record&lt;string, string&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `healthPollMs` | property | <code>healthPollMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `host` | property | <code>host?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>kind: LocalInferenceEngineKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode?: LocalInferenceDriverMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `model` | property | <code>model?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `port` | property | <code>port?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requestTimeoutMs` | property | <code>requestTimeoutMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `startupTimeoutMs` | property | <code>startupTimeoutMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `LocalInferenceProcessHandle` contract members
+## `LocalInferenceDriverStatus`
+
+Local Inference Driver Status interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { LocalInferenceDriverStatus } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export interface LocalInferenceDriverStatus {
+    id: string;
+    kind: LocalInferenceEngineKind;
+    mode: LocalInferenceDriverMode;
+    state: LocalInferenceDriverState;
+    baseUrl: string;
+    model?: string;
+    pid?: number;
+    healthy: boolean;
+    error?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `exited` | property | <code>exited: Promise&lt;{ code: number &#124; null; signal: NodeJS.Signals &#124; null; }&gt;</code> | Public exited property. |
-| `pid` | property | <code>pid: number</code> | Public pid property. |
-| `stop` | method | <code>stop(graceMs?: number): Promise&lt;void&gt;</code> | Public runtime operation for stop. |
+| `baseUrl` | property | <code>baseUrl: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `error` | property | <code>error?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `healthy` | property | <code>healthy: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `kind` | property | <code>kind: LocalInferenceEngineKind</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: LocalInferenceDriverMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `model` | property | <code>model?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pid` | property | <code>pid?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `state` | property | <code>state: LocalInferenceDriverState</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `LocalInferenceProcessSpec` contract members
+## `LocalInferenceHealthProbeRequest`
+
+Local Inference Health Probe Request interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { LocalInferenceHealthProbeRequest } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export interface LocalInferenceHealthProbeRequest {
+    url: string;
+    headers: Record<string, string>;
+    timeoutMs: number;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `args` | property | <code>args: string[]</code> | Public args property. |
-| `command` | property | <code>command: string</code> | Public command property. |
-| `cwd` | property | <code>cwd: string</code> | Public cwd property. |
-| `env` | property | <code>env: Record&lt;string, string&gt;</code> | Public env property. |
+| `headers` | property | <code>headers: Record&lt;string, string&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `timeoutMs` | property | <code>timeoutMs: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `url` | property | <code>url: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `LocalInferenceProcessSupervisor` contract members
+## `LocalInferenceProcessHandle`
+
+Local Inference Process Handle interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { LocalInferenceProcessHandle } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export interface LocalInferenceProcessHandle {
+    readonly pid?: number;
+    readonly exited: Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+    }>;
+    stop(graceMs?: number): Promise<void>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `start` | method | <code>start(spec: LocalInferenceProcessSpec): Promise&lt;LocalInferenceProcessHandle&gt;</code> | Starts start at this module boundary. |
+| `exited` | property | <code>readonly exited: Promise&lt;{ code: number &#124; null; signal: NodeJS.Signals &#124; null; }&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pid` | property | <code>readonly pid?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stop` | method | <code>stop(graceMs?: number): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `LocalInferenceProcessSpec`
+
+Local Inference Process Spec interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { LocalInferenceProcessSpec } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export interface LocalInferenceProcessSpec {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `args` | property | <code>args: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `command` | property | <code>command: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `cwd` | property | <code>cwd?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `env` | property | <code>env?: Record&lt;string, string&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `LocalInferenceProcessSupervisor`
+
+Local Inference Process Supervisor interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { LocalInferenceProcessSupervisor } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export interface LocalInferenceProcessSupervisor {
+    start(spec: LocalInferenceProcessSpec): Promise<LocalInferenceProcessHandle>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `start` | method | <code>start(spec: LocalInferenceProcessSpec): Promise&lt;LocalInferenceProcessHandle&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `LocalInferenceDriverMode`
+
+Public type alias for Local Inference Driver Mode; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { LocalInferenceDriverMode } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export type LocalInferenceDriverMode = 'connect' | 'managed';
+```
+
+## `LocalInferenceDriverState`
+
+Public type alias for Local Inference Driver State; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { LocalInferenceDriverState } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export type LocalInferenceDriverState = 'idle' | 'starting' | 'ready' | 'stopping' | 'stopped' | 'failed';
+```
+
+## `LocalInferenceEngineKind`
+
+Public type alias for Local Inference Engine Kind; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { LocalInferenceEngineKind } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export type LocalInferenceEngineKind = 'ollama' | 'sglang' | 'vllm';
+```
+
+## `LocalInferenceHealthProbe`
+
+Public type alias for Local Inference Health Probe; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { LocalInferenceHealthProbe } from '@codesoul-co/hypha-inference';`
+- Source module: [`drivers`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/inference/src/drivers.ts)
+
+### Declaration
+
+```text
+export type LocalInferenceHealthProbe = (request: LocalInferenceHealthProbeRequest) => Promise<boolean>;
+```

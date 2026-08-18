@@ -1,43 +1,126 @@
 # `@codesoul-co/hypha-core` / `modules/runtime/runtime-activity-helper`
 
 - Package index: [`@codesoul-co/hypha-core`](/api/core)
-- Package guide: [learning and composition guide](/packages/core)
 - Source: [`packages/core/src/modules/runtime/runtime-activity-helper.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-activity-helper.ts)
 - Exports: **3**
+
+## Using this module
+
+Use the Runtime activity helper module for executing runtime behavior at this boundary. It exports 2 classes, 1 interface.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  DefaultRuntimeActivityHelper,
+  RuntimeEventActivityLifecycleCommitPort,
+} from '@codesoul-co/hypha-core';
+
+import type {
+  DefaultRuntimeActivityHelperOptions,
+} from '@codesoul-co/hypha-core';
+```
+
+### Usage patterns
+
+- Use the 1 type/interface export as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 2 classes as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `DefaultRuntimeActivityHelper` | class | <code>new DefaultRuntimeActivityHelper(options: DefaultRuntimeActivityHelperOptions): DefaultRuntimeActivityHelper</code> | Runtime implementation for Default Runtime Activity Helper; see its public constructor and members below. |
-| `RuntimeEventActivityLifecycleCommitPort` | class | <code>new RuntimeEventActivityLifecycleCommitPort(events: RuntimeEventCommitPort): RuntimeEventActivityLifecycleCommitPort</code> | Runtime implementation for Runtime Event Activity Lifecycle Commit Port; see its public constructor and members below. |
-| `DefaultRuntimeActivityHelperOptions` | interface | <code>interface DefaultRuntimeActivityHelperOptions</code> | Field contract for Default Runtime Activity Helper Options; see all contract members below. |
+| `DefaultRuntimeActivityHelper` | class | <code>new DefaultRuntimeActivityHelper(options: DefaultRuntimeActivityHelperOptions): DefaultRuntimeActivityHelper</code> | Default Runtime Activity Helper class with 6 public constructor or member entries; its exact declarations are listed below. |
+| `RuntimeEventActivityLifecycleCommitPort` | class | <code>new RuntimeEventActivityLifecycleCommitPort(events: RuntimeEventCommitPort): RuntimeEventActivityLifecycleCommitPort</code> | Runtime Event Activity Lifecycle Commit Port class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `DefaultRuntimeActivityHelperOptions` | interface | <code>interface DefaultRuntimeActivityHelperOptions</code> | Default Runtime Activity Helper Options interface with 6 public fields or methods. |
 
-## `DefaultRuntimeActivityHelper` public members
+## `DefaultRuntimeActivityHelper`
+
+Default Runtime Activity Helper class with 6 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { DefaultRuntimeActivityHelper } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-activity-helper`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-activity-helper.ts)
+
+### Declaration
+
+```text
+export declare class DefaultRuntimeActivityHelper implements RuntimeActivityHelper {
+    constructor(options: DefaultRuntimeActivityHelperOptions);
+    tool(request: RuntimeActivityRequest): Promise<RuntimeActivityObservation>;
+    memory(request: RuntimeActivityRequest): Promise<RuntimeActivityObservation>;
+    model(request: RuntimeActivityRequest): Promise<RuntimeActivityObservation>;
+    execution(request: RuntimeActivityRequest): Promise<RuntimeActivityObservation>;
+    custom(request: RuntimeActivityRequest): Promise<RuntimeActivityObservation>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(options: DefaultRuntimeActivityHelperOptions): DefaultRuntimeActivityHelper</code> | Creates an instance of this class. |
-| `custom` | method | <code>custom(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public runtime operation for custom. |
-| `execution` | method | <code>execution(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public runtime operation for execution. |
-| `memory` | method | <code>memory(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public runtime operation for memory. |
-| `model` | method | <code>model(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public runtime operation for model. |
-| `tool` | method | <code>tool(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public runtime operation for tool. |
+| `custom` | method | <code>custom(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `execution` | method | <code>execution(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `memory` | method | <code>memory(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `model` | method | <code>model(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `tool` | method | <code>tool(request: RuntimeActivityRequest): Promise&lt;RuntimeActivityObservation&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `RuntimeEventActivityLifecycleCommitPort` public members
+## `RuntimeEventActivityLifecycleCommitPort`
+
+Runtime Event Activity Lifecycle Commit Port class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { RuntimeEventActivityLifecycleCommitPort } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-activity-helper`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-activity-helper.ts)
+
+### Declaration
+
+```text
+export declare class RuntimeEventActivityLifecycleCommitPort implements RuntimeActivityLifecycleCommitPort {
+    constructor(events: RuntimeEventCommitPort);
+    append(request: RuntimeActivityLifecycleCommitRequest): Promise<FrameworkEvent>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `append` | method | <code>append(request: RuntimeActivityLifecycleCommitRequest): Promise&lt;FrameworkEvent&gt;</code> | Appends append at this module boundary. |
+| `append` | method | <code>append(request: RuntimeActivityLifecycleCommitRequest): Promise&lt;FrameworkEvent&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(events: RuntimeEventCommitPort): RuntimeEventActivityLifecycleCommitPort</code> | Creates an instance of this class. |
 
-## `DefaultRuntimeActivityHelperOptions` contract members
+## `DefaultRuntimeActivityHelperOptions`
+
+Default Runtime Activity Helper Options interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { DefaultRuntimeActivityHelperOptions } from '@codesoul-co/hypha-core';`
+- Source module: [`modules/runtime/runtime-activity-helper`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/runtime-activity-helper.ts)
+
+### Declaration
+
+```text
+export interface DefaultRuntimeActivityHelperOptions {
+    execution: RuntimeHelperExecutionScope;
+    ids: RuntimeIdHelper;
+    clock: {
+        now(): Promise<string>;
+    };
+    dispatch: RuntimeActivityDispatchPort;
+    lifecycle: RuntimeActivityLifecycleCommitPort;
+    abortSignal: AbortSignal;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `abortSignal` | property | <code>abortSignal: AbortSignal</code> | Public abort Signal property. |
-| `clock` | property | <code>clock: { now(): Promise&lt;string&gt;; }</code> | Public clock property. |
-| `dispatch` | property | <code>dispatch: RuntimeActivityDispatchPort</code> | Public dispatch property. |
-| `execution` | property | <code>execution: RuntimeHelperExecutionScope</code> | Public execution property. |
-| `ids` | property | <code>ids: RuntimeIdHelper</code> | Public ids property. |
-| `lifecycle` | property | <code>lifecycle: RuntimeActivityLifecycleCommitPort</code> | Public lifecycle property. |
+| `abortSignal` | property | <code>abortSignal: AbortSignal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `clock` | property | <code>clock: { now(): Promise&lt;string&gt;; }</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `dispatch` | property | <code>dispatch: RuntimeActivityDispatchPort</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `execution` | property | <code>execution: RuntimeHelperExecutionScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ids` | property | <code>ids: RuntimeIdHelper</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `lifecycle` | property | <code>lifecycle: RuntimeActivityLifecycleCommitPort</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |

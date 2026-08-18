@@ -1,38 +1,113 @@
 # `@codesoul-co/hypha-memory` / `context-compaction`
 
 - Package index: [`@codesoul-co/hypha-memory`](/api/memory)
-- Package guide: [learning and composition guide](/packages/memory)
 - Source: [`packages/memory/src/context-compaction.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-compaction.ts)
 - Exports: **3**
+
+## Using this module
+
+Use the Context compaction module for using the public contracts and operations for this capability boundary. It exports 1 class, 2 interfaces.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  DeterministicExtractiveContextCompactor,
+} from '@codesoul-co/hypha-memory';
+
+import type {
+  ContextCompactionRequest,
+  ContextCompactor,
+} from '@codesoul-co/hypha-memory';
+```
+
+### Usage patterns
+
+- Use the 2 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 1 class as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `DeterministicExtractiveContextCompactor` | class | <code>new DeterministicExtractiveContextCompactor(): DeterministicExtractiveContextCompactor</code> | Runtime implementation for Deterministic Extractive Context Compactor; see its public constructor and members below. |
-| `ContextCompactionRequest` | interface | <code>interface ContextCompactionRequest</code> | Field contract for Context Compaction Request; see all contract members below. |
-| `ContextCompactor` | interface | <code>interface ContextCompactor</code> | Field contract for Context Compactor; see all contract members below. |
+| `DeterministicExtractiveContextCompactor` | class | <code>new DeterministicExtractiveContextCompactor(): DeterministicExtractiveContextCompactor</code> | Deterministic Extractive Context Compactor class with 3 public constructor or member entries; its exact declarations are listed below. |
+| `ContextCompactionRequest` | interface | <code>interface ContextCompactionRequest</code> | Context Compaction Request interface with 4 public fields or methods. |
+| `ContextCompactor` | interface | <code>interface ContextCompactor</code> | Context Compactor interface with 2 public fields or methods. |
 
-## `DeterministicExtractiveContextCompactor` public members
+## `DeterministicExtractiveContextCompactor`
+
+Deterministic Extractive Context Compactor class with 3 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { DeterministicExtractiveContextCompactor } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-compaction`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-compaction.ts)
+
+### Declaration
+
+```text
+export declare class DeterministicExtractiveContextCompactor implements ContextCompactor {
+    readonly id = "context.compactor.extractive-v1";
+    compact(request: ContextCompactionRequest): Promise<ContextItem | null>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `compact` | method | <code>compact(request: ContextCompactionRequest): Promise&lt;ContextItem &#124; null&gt;</code> | Public runtime operation for compact. |
+| `compact` | method | <code>compact(request: ContextCompactionRequest): Promise&lt;ContextItem &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(): DeterministicExtractiveContextCompactor</code> | Creates an instance of this class. |
-| `id` | property | <code>id: "context.compactor.extractive-v1"</code> | Public id property. |
+| `id` | property | <code>readonly id: "context.compactor.extractive-v1"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextCompactionRequest` contract members
+## `ContextCompactionRequest`
+
+Context Compaction Request interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextCompactionRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-compaction`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-compaction.ts)
+
+### Declaration
+
+```text
+export interface ContextCompactionRequest {
+    items: ContextItem[];
+    maxTokens: number;
+    tokenizer: TokenEstimator;
+    sourceId?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `items` | property | <code>items: ContextItem[]</code> | Public items property. |
-| `maxTokens` | property | <code>maxTokens: number</code> | Public max Tokens property. |
-| `sourceId` | property | <code>sourceId: string</code> | Public source Id property. |
-| `tokenizer` | property | <code>tokenizer: TokenEstimator</code> | Public tokenizer property. |
+| `items` | property | <code>items: ContextItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxTokens` | property | <code>maxTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceId` | property | <code>sourceId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tokenizer` | property | <code>tokenizer: TokenEstimator</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextCompactor` contract members
+## `ContextCompactor`
+
+Context Compactor interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextCompactor } from '@codesoul-co/hypha-memory';`
+- Source module: [`context-compaction`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/context-compaction.ts)
+
+### Declaration
+
+```text
+export interface ContextCompactor {
+    readonly id: string;
+    compact(request: ContextCompactionRequest): Promise<ContextItem | null>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `compact` | method | <code>compact(request: ContextCompactionRequest): Promise&lt;ContextItem &#124; null&gt;</code> | Public runtime operation for compact. |
-| `id` | property | <code>id: string</code> | Public id property. |
+| `compact` | method | <code>compact(request: ContextCompactionRequest): Promise&lt;ContextItem &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |

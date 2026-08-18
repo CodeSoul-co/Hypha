@@ -1,654 +1,2357 @@
 # `@codesoul-co/hypha-kernel` / `index`
 
 - Package index: [`@codesoul-co/hypha-kernel`](/api/kernel)
-- Package guide: [learning and composition guide](/packages/kernel)
 - Source: [`packages/kernel/src/index.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 - Exports: **85**
+
+## Using this module
+
+Aggregates the public entrypoint exports for `@codesoul-co/hypha-kernel`; applications import these symbols from the package entrypoint instead of internal file paths.
+
+### Import from the package entrypoint
+
+```ts
+import {
+  BasicReActAgentRuntime,
+  DefaultAgenticReasoner,
+  DefaultContextBuilder,
+  DefaultThinkingPlanner,
+  DefaultVerifier,
+  InMemoryReActContinuationCheckpointStore,
+  MemoryContextBuilder,
+  ReActAgentRunner,
+} from '@codesoul-co/hypha-kernel';
+
+import type {
+  AgenticReasoner,
+  AgenticReasonerInput,
+  AgenticReasoningDecision,
+  BasicReActAgentRuntimeOptions,
+  BuiltAgentContext,
+  ContextBudget,
+  ContextBuilder,
+  ContextBuildInput,
+} from '@codesoul-co/hypha-kernel';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 44 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+- The module exposes 12 classes as constructable runtime implementations. Each symbol entry lists its constructor and public methods.
+- The module exposes 8 functions as direct operation entrypoints. Every overload, required/optional parameter, and return type is documented below.
+- The 21 constant/enum exports provide stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.
+
+### Runtime validation example
+
+```ts
+import { agenticReasoningModeSchema } from '@codesoul-co/hypha-kernel';
+
+declare function loadExternalInput(): unknown;
+const input: unknown = loadExternalInput();
+const parsed = agenticReasoningModeSchema.parse(input);
+```
+
+Parse untrusted configuration, network, or persisted input with the runtime schema before passing it to functions or classes that expect a validated contract.
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `BasicReActAgentRuntime` | class | <code>new BasicReActAgentRuntime(options?: BasicReActAgentRuntimeOptions): BasicReActAgentRuntime</code> | Runtime implementation for Basic Re Act Agent Runtime; see its public constructor and members below. |
-| `DefaultAgenticReasoner` | class | <code>new DefaultAgenticReasoner(now?: () =&gt; string): DefaultAgenticReasoner</code> | Runtime implementation for Default Agentic Reasoner; see its public constructor and members below. |
-| `DefaultContextBuilder` | class | <code>new DefaultContextBuilder(): DefaultContextBuilder</code> | Runtime implementation for Default Context Builder; see its public constructor and members below. |
-| `DefaultThinkingPlanner` | class | <code>new DefaultThinkingPlanner(now?: () =&gt; string): DefaultThinkingPlanner</code> | Runtime implementation for Default Thinking Planner; see its public constructor and members below. |
-| `DefaultVerifier` | class | <code>new DefaultVerifier(): DefaultVerifier</code> | Runtime implementation for Default Verifier; see its public constructor and members below. |
-| `InMemoryReActContinuationCheckpointStore` | class | <code>new InMemoryReActContinuationCheckpointStore(options?: InMemoryReActContinuationCheckpointStoreOptions): InMemoryReActContinuationCheckpointStore</code> | Runtime implementation for In Memory Re Act Continuation Checkpoint Store; see its public constructor and members below. |
-| `MemoryContextBuilder` | class | <code>new MemoryContextBuilder(options: MemoryContextBuilderOptions): MemoryContextBuilder</code> | Runtime implementation for Memory Context Builder; see its public constructor and members below. |
-| `ReActAgentRunner` | class | <code>new ReActAgentRunner(options: ReActAgentRunnerOptions): ReActAgentRunner</code> | Runtime implementation for Re Act Agent Runner; see its public constructor and members below. |
-| `ReActRunner` | class | <code>new ReActRunner(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner</code> | Runtime implementation for Re Act Runner; see its public constructor and members below. |
-| `ReasoningContextBuilder` | class | <code>new ReasoningContextBuilder(options?: ReasoningContextBuilderOptions): ReasoningContextBuilder</code> | Runtime implementation for Reasoning Context Builder; see its public constructor and members below. |
-| `SkillContextBuilder` | class | <code>new SkillContextBuilder(options: SkillContextBuilderOptions): SkillContextBuilder</code> | Runtime implementation for Skill Context Builder; see its public constructor and members below. |
-| `ToolRunnerActivityAdapter` | class | <code>new ToolRunnerActivityAdapter(runner: ToolRunner): ToolRunnerActivityAdapter</code> | Runtime implementation for Tool Runner Activity Adapter; see its public constructor and members below. |
-| `agenticReasoningModeSchema` | constant | <code>const agenticReasoningModeSchema: z.ZodEnum&lt;["react", "fsm_react", "tot", "critique"]&gt;</code> | Runtime schema for agentic Reasoning Mode. |
-| `kernelSpecDefinitions` | constant | <code>const kernelSpecDefinitions: readonly [SpecSchemaDefinition&lt;ReActAgentSpec&gt;, SpecSchemaDefinition&lt;ReasoningConfig&gt;]</code> | kernel Spec Definitions constant exported by the `index` module. |
-| `kernelSpecJsonSchemas` | constant | <code>const kernelSpecJsonSchemas: Record&lt;string, JsonSchema&gt;</code> | kernel Spec Json Schemas constant exported by the `index` module. |
+| `BasicReActAgentRuntime` | class | <code>new BasicReActAgentRuntime(options?: BasicReActAgentRuntimeOptions): BasicReActAgentRuntime</code> | Basic ReAct Agent Runtime class with 4 public constructor or member entries; its exact declarations are listed below. |
+| `DefaultAgenticReasoner` | class | <code>new DefaultAgenticReasoner(now?: () =&gt; string): DefaultAgenticReasoner</code> | Default Agentic Reasoner class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `DefaultContextBuilder` | class | <code>new DefaultContextBuilder(): DefaultContextBuilder</code> | Default Context Builder class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `DefaultThinkingPlanner` | class | <code>new DefaultThinkingPlanner(now?: () =&gt; string): DefaultThinkingPlanner</code> | Default Thinking Planner class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `DefaultVerifier` | class | <code>new DefaultVerifier(): DefaultVerifier</code> | Default Verifier class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `InMemoryReActContinuationCheckpointStore` | class | <code>new InMemoryReActContinuationCheckpointStore(options?: InMemoryReActContinuationCheckpointStoreOptions): InMemoryReActContinuationCheckpointStore</code> | In Memory ReAct Continuation Checkpoint Store class with 4 public constructor or member entries; its exact declarations are listed below. |
+| `MemoryContextBuilder` | class | <code>new MemoryContextBuilder(options: MemoryContextBuilderOptions): MemoryContextBuilder</code> | Memory Context Builder class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `ReActAgentRunner` | class | <code>new ReActAgentRunner(options: ReActAgentRunnerOptions): ReActAgentRunner</code> | ReAct Agent Runner class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `ReActRunner` | class | <code>new ReActRunner(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner</code> | ReAct Runner class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `ReasoningContextBuilder` | class | <code>new ReasoningContextBuilder(options?: ReasoningContextBuilderOptions): ReasoningContextBuilder</code> | Reasoning Context Builder class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `SkillContextBuilder` | class | <code>new SkillContextBuilder(options: SkillContextBuilderOptions): SkillContextBuilder</code> | Skill Context Builder class with 2 public constructor or member entries; its exact declarations are listed below. |
+| `ToolRunnerActivityAdapter` | class | <code>new ToolRunnerActivityAdapter(runner: ToolRunner): ToolRunnerActivityAdapter</code> | Tool Runner Activity Adapter class with 3 public constructor or member entries; its exact declarations are listed below. |
+| `agenticReasoningModeSchema` | constant | <code>const agenticReasoningModeSchema: z.ZodEnum&lt;["react", "fsm_react", "tot", "critique"]&gt;</code> | Runtime schema for Agentic Reasoning Mode. |
+| `kernelSpecDefinitions` | constant | <code>const kernelSpecDefinitions: readonly [SpecSchemaDefinition&lt;ReActAgentSpec&gt;, SpecSchemaDefinition&lt;ReasoningConfig&gt;]</code> | Kernel Spec Definitions constant exported by the `index` module. |
+| `kernelSpecJsonSchemas` | constant | <code>const kernelSpecJsonSchemas: Record&lt;string, JsonSchema&gt;</code> | Kernel Spec JSON Schemas constant exported by the `index` module. |
 | `REACT_PHASE_ORDER` | constant | <code>const REACT_PHASE_ORDER: ReActPhase[]</code> | REACT PHASE ORDER constant exported by the `index` module. |
 | `REACT_SUSPENSION_REASONS` | constant | <code>const REACT_SUSPENSION_REASONS: readonly ["quantum_exhausted", "iteration_budget_exhausted", "model_call_budget_exhausted", "tool_call_budget_exhausted", "token_budget_exhausted", "non_progress", "deadline_exceeded"]</code> | REACT SUSPENSION REASONS constant exported by the `index` module. |
-| `reActActionSchema` | constant | <code>const reActActionSchema: z.ZodEffects&lt;z.ZodObject&lt;{ type: z.ZodEnum&lt;["tool", "model", "finish", "human_review"]&gt;; toolCallId: z.ZodOptional&lt;z.ZodString&gt;; target: z.ZodOptional&lt;z.ZodString&gt;; input: z.ZodOptional&lt;z.ZodEffects&lt;z.ZodUnknown, unknown, unknown&gt;&gt;; reason: z.ZodOptional&lt;z.ZodString&gt;; }, "strict", z.ZodTypeAny, { type: "human_review" &#124; "tool" &#124; "model" &#124; "finish"; reason?: string &#124; undefined; toolCallId?: ...</code> | Runtime schema for re Act Action. |
-| `reactAgentSpecDefinition` | constant | <code>const reactAgentSpecDefinition: SpecSchemaDefinition&lt;ReActAgentSpec&gt;</code> | Runtime validation entrypoint for the react Agent spec, combining its parser, example and JSON Schema. |
-| `reactAgentSpecExample` | constant | <code>const reactAgentSpecExample: ReActAgentSpec</code> | Valid example value for react Agent Spec. |
-| `reactAgentSpecJsonSchema` | constant | <code>const reactAgentSpecJsonSchema: JsonSchema</code> | JSON Schema for react Agent Spec. |
-| `reactAgentSpecSchema` | constant | <code>const reactAgentSpecSchema: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodString; description: z.ZodOptional&lt;z.ZodString&gt;; owner: z.ZodOptional&lt;z.ZodString&gt;; tags: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; createdAt: z.ZodOptional&lt;z.ZodString&gt;; updatedAt: z.ZodOptional&lt;z.ZodString&gt;; } &amp; { name: z.ZodString; modelAlias: z.ZodString; systemInstructions: z.ZodOptional&lt;z.ZodString&gt;; promptRefs: z.ZodOptional&lt;z.Zo...</code> | Runtime schema for react Agent Spec. |
-| `reActContinuationCheckpointJsonSchema` | constant | <code>const reActContinuationCheckpointJsonSchema: JsonSchema</code> | JSON Schema for re Act Continuation Checkpoint. |
-| `reActContinuationCheckpointSchema` | constant | <code>const reActContinuationCheckpointSchema: z.ZodEffects&lt;z.ZodObject&lt;{ version: z.ZodLiteral&lt;"1.0.0"&gt;; runId: z.ZodString; stepId: z.ZodString; scopeHash: z.ZodString; agentRef: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodString; }, "strict", z.ZodTypeAny, { version: string; id: string; }, { version: string; id: string; }&gt;; nextPhase: z.ZodEnum&lt;["reason", "act"]&gt;; messages: z.ZodArray&lt;z.ZodObject&lt;{ role: z.ZodEnum&lt;[...</code> | Runtime schema for re Act Continuation Checkpoint. |
-| `reActExecutionBudgetJsonSchema` | constant | <code>const reActExecutionBudgetJsonSchema: JsonSchema</code> | JSON Schema for re Act Execution Budget. |
-| `reActExecutionBudgetSchema` | constant | <code>const reActExecutionBudgetSchema: z.ZodObject&lt;{ maxIterations: z.ZodNumber; maxModelCalls: z.ZodNumber; maxToolCalls: z.ZodNumber; maxTotalTokens: z.ZodOptional&lt;z.ZodNumber&gt;; maxConsecutiveNoProgress: z.ZodNumber; quantumIterations: z.ZodNumber; deadlineAt: z.ZodOptional&lt;z.ZodString&gt;; }, "strict", z.ZodTypeAny, { maxIterations: number; maxModelCalls: number; maxToolCalls: number; maxConsecutiveNoProgress: number; ...</code> | Runtime schema for re Act Execution Budget. |
-| `reactPhaseSchema` | constant | <code>const reactPhaseSchema: z.ZodEnum&lt;["observe", "reason", "select_action", "policy_check", "act", "observe_result", "verify", "memory_sync", "complete", "fail", "human_review", "suspend", "cancel"]&gt;</code> | Runtime schema for react Phase. |
-| `reasoningConfigExample` | constant | <code>const reasoningConfigExample: ReasoningConfig</code> | Valid example value for reasoning Config. |
-| `reasoningConfigJsonSchema` | constant | <code>const reasoningConfigJsonSchema: JsonSchema</code> | JSON Schema for reasoning Config. |
-| `reasoningConfigSchema` | constant | <code>const reasoningConfigSchema: z.ZodObject&lt;{ thinkingMode: z.ZodOptional&lt;z.ZodEnum&lt;["none", "summary", "structured"]&gt;&gt;; agenticMode: z.ZodOptional&lt;z.ZodEnum&lt;["react", "fsm_react", "tot", "critique"]&gt;&gt;; maxSteps: z.ZodOptional&lt;z.ZodNumber&gt;; persist: z.ZodOptional&lt;z.ZodEnum&lt;["summary_only", "events_only"]&gt;&gt;; plannerRef: z.ZodOptional&lt;z.ZodString&gt;; reasonerRef: z.ZodOptional&lt;z.ZodString&gt;; metadata: z.ZodOptional&lt;z.ZodR...</code> | Runtime schema for reasoning Config. |
-| `reasoningConfigSpecDefinition` | constant | <code>const reasoningConfigSpecDefinition: SpecSchemaDefinition&lt;ReasoningConfig&gt;</code> | Runtime validation entrypoint for the reasoning Config spec, combining its parser, example and JSON Schema. |
-| `reasoningPersistenceSchema` | constant | <code>const reasoningPersistenceSchema: z.ZodEnum&lt;["summary_only", "events_only"]&gt;</code> | Runtime schema for reasoning Persistence. |
-| `thinkingModeSchema` | constant | <code>const thinkingModeSchema: z.ZodEnum&lt;["none", "summary", "structured"]&gt;</code> | Runtime schema for thinking Mode. |
-| `createEpisodicMemorySync` | function | <code>createEpisodicMemorySync(options: EpisodicMemorySyncOptions): NonNullable&lt;ReActRunnerOptions["syncMemory"]&gt;</code> | Creates Episodic Memory Sync at this module boundary. |
-| `createReActStep` | function | <code>createReActStep(id: string, phase: ReActPhase, input?: unknown): ReActStep</code> | Creates Re Act Step at this module boundary. |
-| `reActContinuationScopeHash` | function | <code>reActContinuationScopeHash(context: ReActRunContext): string</code> | Public runtime operation for re Act Continuation Scope Hash. |
-| `validateReActAction` | function | <code>validateReActAction(input: unknown): ReActAction</code> | Validates Re Act Action at this module boundary. |
-| `validateReActAgentSpec` | function | <code>validateReActAgentSpec(input: unknown): ReActAgentSpec</code> | Validates Re Act Agent Spec at this module boundary. |
-| `validateReActContinuationCheckpoint` | function | <code>validateReActContinuationCheckpoint(input: unknown): ReActContinuationCheckpoint</code> | Validates Re Act Continuation Checkpoint at this module boundary. |
-| `validateReActExecutionBudget` | function | <code>validateReActExecutionBudget(input: unknown): ReActExecutionBudget</code> | Validates Re Act Execution Budget at this module boundary. |
-| `validateReasoningConfig` | function | <code>validateReasoningConfig(input: unknown): ReasoningConfig</code> | Validates Reasoning Config at this module boundary. |
-| `AgenticReasoner` | interface | <code>interface AgenticReasoner</code> | Field contract for Agentic Reasoner; see all contract members below. |
-| `AgenticReasonerInput` | interface | <code>interface AgenticReasonerInput</code> | Field contract for Agentic Reasoner Input; see all contract members below. |
-| `AgenticReasoningDecision` | interface | <code>interface AgenticReasoningDecision</code> | Field contract for Agentic Reasoning Decision; see all contract members below. |
-| `BasicReActAgentRuntimeOptions` | interface | <code>interface BasicReActAgentRuntimeOptions</code> | Field contract for Basic Re Act Agent Runtime Options; see all contract members below. |
-| `BuiltAgentContext` | interface | <code>interface BuiltAgentContext extends ReActRunContext</code> | Field contract for Built Agent Context; see all contract members below. |
-| `ContextBudget` | interface | <code>interface ContextBudget</code> | Field contract for Context Budget; see all contract members below. |
-| `ContextBuilder` | interface | <code>interface ContextBuilder</code> | Field contract for Context Builder; see all contract members below. |
-| `ContextBuildInput` | interface | <code>interface ContextBuildInput</code> | Field contract for Context Build Input; see all contract members below. |
-| `ContextProvenance` | interface | <code>interface ContextProvenance</code> | Field contract for Context Provenance; see all contract members below. |
-| `EpisodicMemorySyncOptions` | interface | <code>interface EpisodicMemorySyncOptions</code> | Field contract for Episodic Memory Sync Options; see all contract members below. |
-| `InMemoryReActContinuationCheckpointStoreOptions` | interface | <code>interface InMemoryReActContinuationCheckpointStoreOptions</code> | Field contract for In Memory Re Act Continuation Checkpoint Store Options; see all contract members below. |
-| `MemoryContextBuilderOptions` | interface | <code>interface MemoryContextBuilderOptions</code> | Field contract for Memory Context Builder Options; see all contract members below. |
-| `MemoryContextItem` | interface | <code>interface MemoryContextItem</code> | Field contract for Memory Context Item; see all contract members below. |
-| `ReActAction` | interface | <code>interface ReActAction</code> | Field contract for Re Act Action; see all contract members below. |
-| `ReActAgentRunnerOptions` | interface | <code>interface ReActAgentRunnerOptions extends Omit&lt;ReActRunnerOptions, 'toolRunner'&gt;</code> | Field contract for Re Act Agent Runner Options; see all contract members below. |
-| `ReActAgentRuntime` | interface | <code>interface ReActAgentRuntime</code> | Field contract for Re Act Agent Runtime; see all contract members below. |
-| `ReActAgentSpec` | interface | <code>interface ReActAgentSpec extends VersionedSpec, SpecMetadata</code> | Field contract for Re Act Agent Spec; see all contract members below. |
-| `ReActContinuationCheckpoint` | interface | <code>interface ReActContinuationCheckpoint</code> | Field contract for Re Act Continuation Checkpoint; see all contract members below. |
-| `ReActContinuationCheckpointPutResult` | interface | <code>interface ReActContinuationCheckpointPutResult</code> | Field contract for Re Act Continuation Checkpoint Put Result; see all contract members below. |
-| `ReActContinuationCheckpointStore` | interface | <code>interface ReActContinuationCheckpointStore</code> | Field contract for Re Act Continuation Checkpoint Store; see all contract members below. |
+| `reActActionSchema` | constant | <code>const reActActionSchema: z.ZodEffects&lt;z.ZodObject&lt;{ type: z.ZodEnum&lt;["tool", "model", "finish", "human_review"]&gt;; toolCallId: z.ZodOptional&lt;z.ZodString&gt;; target: z.ZodOptional&lt;z.ZodString&gt;; input: z.ZodOptional&lt;z.ZodEffects&lt;z.ZodUnknown, unknown, unknown&gt;&gt;; reason: z.ZodOptional&lt;z.ZodString&gt;; }, "strict", z.ZodTypeAny, { type: "human_review" &#124; "tool" &#124; "model" &#124; "finish"; reason?: string &#124; undefined; toolCallId?: ...</code> | Runtime schema for Re Act Action. |
+| `reactAgentSpecDefinition` | constant | <code>const reactAgentSpecDefinition: SpecSchemaDefinition&lt;ReActAgentSpec&gt;</code> | Runtime validation entrypoint for the React Agent spec, combining its parser, example and JSON Schema. |
+| `reactAgentSpecExample` | constant | <code>const reactAgentSpecExample: ReActAgentSpec</code> | Valid example value for React Agent Spec. |
+| `reactAgentSpecJsonSchema` | constant | <code>const reactAgentSpecJsonSchema: JsonSchema</code> | JSON Schema for React Agent Spec. |
+| `reactAgentSpecSchema` | constant | <code>const reactAgentSpecSchema: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodString; description: z.ZodOptional&lt;z.ZodString&gt;; owner: z.ZodOptional&lt;z.ZodString&gt;; tags: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; createdAt: z.ZodOptional&lt;z.ZodString&gt;; updatedAt: z.ZodOptional&lt;z.ZodString&gt;; } &amp; { name: z.ZodString; modelAlias: z.ZodString; systemInstructions: z.ZodOptional&lt;z.ZodString&gt;; promptRefs: z.ZodOptional&lt;z.Zo...</code> | Runtime schema for React Agent Spec. |
+| `reActContinuationCheckpointJsonSchema` | constant | <code>const reActContinuationCheckpointJsonSchema: JsonSchema</code> | JSON Schema for Re Act Continuation Checkpoint. |
+| `reActContinuationCheckpointSchema` | constant | <code>const reActContinuationCheckpointSchema: z.ZodEffects&lt;z.ZodObject&lt;{ version: z.ZodLiteral&lt;"1.0.0"&gt;; runId: z.ZodString; stepId: z.ZodString; scopeHash: z.ZodString; agentRef: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodString; }, "strict", z.ZodTypeAny, { version: string; id: string; }, { version: string; id: string; }&gt;; nextPhase: z.ZodEnum&lt;["reason", "act"]&gt;; messages: z.ZodArray&lt;z.ZodObject&lt;{ role: z.ZodEnum&lt;[...</code> | Runtime schema for Re Act Continuation Checkpoint. |
+| `reActExecutionBudgetJsonSchema` | constant | <code>const reActExecutionBudgetJsonSchema: JsonSchema</code> | JSON Schema for Re Act Execution Budget. |
+| `reActExecutionBudgetSchema` | constant | <code>const reActExecutionBudgetSchema: z.ZodObject&lt;{ maxIterations: z.ZodNumber; maxModelCalls: z.ZodNumber; maxToolCalls: z.ZodNumber; maxTotalTokens: z.ZodOptional&lt;z.ZodNumber&gt;; maxConsecutiveNoProgress: z.ZodNumber; quantumIterations: z.ZodNumber; deadlineAt: z.ZodOptional&lt;z.ZodString&gt;; }, "strict", z.ZodTypeAny, { maxIterations: number; maxModelCalls: number; maxToolCalls: number; maxConsecutiveNoProgress: number; ...</code> | Runtime schema for Re Act Execution Budget. |
+| `reactPhaseSchema` | constant | <code>const reactPhaseSchema: z.ZodEnum&lt;["observe", "reason", "select_action", "policy_check", "act", "observe_result", "verify", "memory_sync", "complete", "fail", "human_review", "suspend", "cancel"]&gt;</code> | Runtime schema for React Phase. |
+| `reasoningConfigExample` | constant | <code>const reasoningConfigExample: ReasoningConfig</code> | Valid example value for Reasoning Config. |
+| `reasoningConfigJsonSchema` | constant | <code>const reasoningConfigJsonSchema: JsonSchema</code> | JSON Schema for Reasoning Config. |
+| `reasoningConfigSchema` | constant | <code>const reasoningConfigSchema: z.ZodObject&lt;{ thinkingMode: z.ZodOptional&lt;z.ZodEnum&lt;["none", "summary", "structured"]&gt;&gt;; agenticMode: z.ZodOptional&lt;z.ZodEnum&lt;["react", "fsm_react", "tot", "critique"]&gt;&gt;; maxSteps: z.ZodOptional&lt;z.ZodNumber&gt;; persist: z.ZodOptional&lt;z.ZodEnum&lt;["summary_only", "events_only"]&gt;&gt;; plannerRef: z.ZodOptional&lt;z.ZodString&gt;; reasonerRef: z.ZodOptional&lt;z.ZodString&gt;; metadata: z.ZodOptional&lt;z.ZodR...</code> | Runtime schema for Reasoning Config. |
+| `reasoningConfigSpecDefinition` | constant | <code>const reasoningConfigSpecDefinition: SpecSchemaDefinition&lt;ReasoningConfig&gt;</code> | Runtime validation entrypoint for the Reasoning Config spec, combining its parser, example and JSON Schema. |
+| `reasoningPersistenceSchema` | constant | <code>const reasoningPersistenceSchema: z.ZodEnum&lt;["summary_only", "events_only"]&gt;</code> | Runtime schema for Reasoning Persistence. |
+| `thinkingModeSchema` | constant | <code>const thinkingModeSchema: z.ZodEnum&lt;["none", "summary", "structured"]&gt;</code> | Runtime schema for Thinking Mode. |
+| `createEpisodicMemorySync` | function | <code>createEpisodicMemorySync(options: EpisodicMemorySyncOptions): NonNullable&lt;ReActRunnerOptions["syncMemory"]&gt;</code> | Create Episodic Memory Sync function with 1 public call signature; parameters and return types are listed below. |
+| `createReActStep` | function | <code>createReActStep(id: string, phase: ReActPhase, input?: unknown): ReActStep</code> | Create ReAct Step function with 1 public call signature; parameters and return types are listed below. |
+| `reActContinuationScopeHash` | function | <code>reActContinuationScopeHash(context: ReActRunContext): string</code> | Re Act Continuation Scope Hash function with 1 public call signature; parameters and return types are listed below. |
+| `validateReActAction` | function | <code>validateReActAction(input: unknown): ReActAction</code> | Validate ReAct Action function with 1 public call signature; parameters and return types are listed below. |
+| `validateReActAgentSpec` | function | <code>validateReActAgentSpec(input: unknown): ReActAgentSpec</code> | Validate ReAct Agent Spec function with 1 public call signature; parameters and return types are listed below. |
+| `validateReActContinuationCheckpoint` | function | <code>validateReActContinuationCheckpoint(input: unknown): ReActContinuationCheckpoint</code> | Validate ReAct Continuation Checkpoint function with 1 public call signature; parameters and return types are listed below. |
+| `validateReActExecutionBudget` | function | <code>validateReActExecutionBudget(input: unknown): ReActExecutionBudget</code> | Validate ReAct Execution Budget function with 1 public call signature; parameters and return types are listed below. |
+| `validateReasoningConfig` | function | <code>validateReasoningConfig(input: unknown): ReasoningConfig</code> | Validate Reasoning Config function with 1 public call signature; parameters and return types are listed below. |
+| `AgenticReasoner` | interface | <code>interface AgenticReasoner</code> | Agentic Reasoner interface with 1 public fields or methods. |
+| `AgenticReasonerInput` | interface | <code>interface AgenticReasonerInput</code> | Agentic Reasoner Input interface with 3 public fields or methods. |
+| `AgenticReasoningDecision` | interface | <code>interface AgenticReasoningDecision</code> | Agentic Reasoning Decision interface with 11 public fields or methods. |
+| `BasicReActAgentRuntimeOptions` | interface | <code>interface BasicReActAgentRuntimeOptions</code> | Basic ReAct Agent Runtime Options interface with 1 public fields or methods. |
+| `BuiltAgentContext` | interface | <code>interface BuiltAgentContext extends ReActRunContext</code> | Built Agent Context interface with 18 public fields or methods. |
+| `ContextBudget` | interface | <code>interface ContextBudget</code> | Context Budget interface with 4 public fields or methods. |
+| `ContextBuilder` | interface | <code>interface ContextBuilder</code> | Context Builder interface with 1 public fields or methods. |
+| `ContextBuildInput` | interface | <code>interface ContextBuildInput</code> | Context Build Input interface with 12 public fields or methods. |
+| `ContextProvenance` | interface | <code>interface ContextProvenance</code> | Context Provenance interface with 6 public fields or methods. |
+| `EpisodicMemorySyncOptions` | interface | <code>interface EpisodicMemorySyncOptions</code> | Episodic Memory Sync Options interface with 7 public fields or methods. |
+| `InMemoryReActContinuationCheckpointStoreOptions` | interface | <code>interface InMemoryReActContinuationCheckpointStoreOptions</code> | In Memory ReAct Continuation Checkpoint Store Options interface with 3 public fields or methods. |
+| `MemoryContextBuilderOptions` | interface | <code>interface MemoryContextBuilderOptions</code> | Memory Context Builder Options interface with 7 public fields or methods. |
+| `MemoryContextItem` | interface | <code>interface MemoryContextItem</code> | Memory Context Item interface with 5 public fields or methods. |
+| `ReActAction` | interface | <code>interface ReActAction</code> | ReAct Action interface with 5 public fields or methods. |
+| `ReActAgentRunnerOptions` | interface | <code>interface ReActAgentRunnerOptions extends Omit&lt;ReActRunnerOptions, 'toolRunner'&gt;</code> | ReAct Agent Runner Options interface with 25 public fields or methods. |
+| `ReActAgentRuntime` | interface | <code>interface ReActAgentRuntime</code> | ReAct Agent Runtime interface with 3 public fields or methods. |
+| `ReActAgentSpec` | interface | <code>interface ReActAgentSpec extends VersionedSpec, SpecMetadata</code> | ReAct Agent Spec interface with 17 public fields or methods. |
+| `ReActContinuationCheckpoint` | interface | <code>interface ReActContinuationCheckpoint</code> | ReAct Continuation Checkpoint interface with 19 public fields or methods. |
+| `ReActContinuationCheckpointPutResult` | interface | <code>interface ReActContinuationCheckpointPutResult</code> | ReAct Continuation Checkpoint Put Result interface with 2 public fields or methods. |
+| `ReActContinuationCheckpointStore` | interface | <code>interface ReActContinuationCheckpointStore</code> | ReAct Continuation Checkpoint Store interface with 3 public fields or methods. |
 | `ReActExecutionBudget` | interface | <code>interface ReActExecutionBudget</code> | Global limits survive process restarts through ReActContinuationCheckpoint. quantumIterations only bounds one worker turn; it is not a new total budget. |
-| `ReActObservation` | interface | <code>interface ReActObservation</code> | Field contract for Re Act Observation; see all contract members below. |
-| `ReActRunContext` | interface | <code>interface ReActRunContext</code> | Field contract for Re Act Run Context; see all contract members below. |
-| `ReActRunControl` | interface | <code>interface ReActRunControl</code> | Field contract for Re Act Run Control; see all contract members below. |
-| `ReActRunnerOptions` | interface | <code>interface ReActRunnerOptions</code> | Field contract for Re Act Runner Options; see all contract members below. |
-| `ReActRunResult` | interface | <code>interface ReActRunResult</code> | Field contract for Re Act Run Result; see all contract members below. |
-| `ReActStep` | interface | <code>interface ReActStep</code> | Field contract for Re Act Step; see all contract members below. |
-| `ReActSuspension` | interface | <code>interface ReActSuspension</code> | Field contract for Re Act Suspension; see all contract members below. |
-| `ReasoningConfig` | interface | <code>interface ReasoningConfig</code> | Field contract for Reasoning Config; see all contract members below. |
-| `ReasoningContextBuilderOptions` | interface | <code>interface ReasoningContextBuilderOptions</code> | Field contract for Reasoning Context Builder Options; see all contract members below. |
-| `RequiredReasoningConfig` | interface | <code>interface RequiredReasoningConfig extends Required&lt;Omit&lt;ReasoningConfig, 'plannerRef' &#124; 'reasonerRef' &#124; 'metadata'&gt;&gt;</code> | Field contract for Required Reasoning Config; see all contract members below. |
-| `SkillContextBuilderOptions` | interface | <code>interface SkillContextBuilderOptions</code> | Field contract for Skill Context Builder Options; see all contract members below. |
-| `ThinkingPlan` | interface | <code>interface ThinkingPlan</code> | Field contract for Thinking Plan; see all contract members below. |
-| `ThinkingPlanner` | interface | <code>interface ThinkingPlanner</code> | Field contract for Thinking Planner; see all contract members below. |
-| `ThinkingPlannerInput` | interface | <code>interface ThinkingPlannerInput</code> | Field contract for Thinking Planner Input; see all contract members below. |
-| `ToolActivityPort` | interface | <code>interface ToolActivityPort</code> | Field contract for Tool Activity Port; see all contract members below. |
-| `ToolActivityRequest` | interface | <code>interface ToolActivityRequest</code> | Field contract for Tool Activity Request; see all contract members below. |
-| `ToolActivityResult` | interface | <code>interface ToolActivityResult</code> | Field contract for Tool Activity Result; see all contract members below. |
-| `Verifier` | interface | <code>interface Verifier</code> | Field contract for Verifier; see all contract members below. |
-| `AgenticReasoningMode` | type | <code>type AgenticReasoningMode = 'react' &#124; 'fsm_react' &#124; 'tot' &#124; 'critique'</code> | Public type alias for Agentic Reasoning Mode. |
-| `ReActPhase` | type | <code>type ReActPhase = 'observe' &#124; 'reason' &#124; 'select_action' &#124; 'policy_check' &#124; 'act' &#124; 'observe_result' &#124; 'verify' &#124; 'memory_sync' &#124; 'complete' &#124; 'fail' &#124; 'human_review' &#124; 'suspend' &#124; 'cancel'</code> | Public type alias for Re Act Phase. |
-| `ReActSuspensionReason` | type | <code>type ReActSuspensionReason = (typeof REACT_SUSPENSION_REASONS)[number]</code> | Public type alias for Re Act Suspension Reason. |
-| `ReasoningPersistence` | type | <code>type ReasoningPersistence = 'summary_only' &#124; 'events_only'</code> | Public type alias for Reasoning Persistence. |
-| `ThinkingMode` | type | <code>type ThinkingMode = 'none' &#124; 'summary' &#124; 'structured'</code> | Public type alias for Thinking Mode. |
+| `ReActObservation` | interface | <code>interface ReActObservation</code> | ReAct Observation interface with 3 public fields or methods. |
+| `ReActRunContext` | interface | <code>interface ReActRunContext</code> | ReAct Run Context interface with 14 public fields or methods. |
+| `ReActRunControl` | interface | <code>interface ReActRunControl</code> | ReAct Run Control interface with 4 public fields or methods. |
+| `ReActRunnerOptions` | interface | <code>interface ReActRunnerOptions</code> | ReAct Runner Options interface with 13 public fields or methods. |
+| `ReActRunResult` | interface | <code>interface ReActRunResult</code> | ReAct Run Result interface with 8 public fields or methods. |
+| `ReActStep` | interface | <code>interface ReActStep</code> | ReAct Step interface with 5 public fields or methods. |
+| `ReActSuspension` | interface | <code>interface ReActSuspension</code> | ReAct Suspension interface with 4 public fields or methods. |
+| `ReasoningConfig` | interface | <code>interface ReasoningConfig</code> | Reasoning Config interface with 7 public fields or methods. |
+| `ReasoningContextBuilderOptions` | interface | <code>interface ReasoningContextBuilderOptions</code> | Reasoning Context Builder Options interface with 5 public fields or methods. |
+| `RequiredReasoningConfig` | interface | <code>interface RequiredReasoningConfig extends Required&lt;Omit&lt;ReasoningConfig, 'plannerRef' &#124; 'reasonerRef' &#124; 'metadata'&gt;&gt;</code> | Required Reasoning Config interface with 7 public fields or methods. |
+| `SkillContextBuilderOptions` | interface | <code>interface SkillContextBuilderOptions</code> | Skill Context Builder Options interface with 9 public fields or methods. |
+| `ThinkingPlan` | interface | <code>interface ThinkingPlan</code> | Thinking Plan interface with 10 public fields or methods. |
+| `ThinkingPlanner` | interface | <code>interface ThinkingPlanner</code> | Thinking Planner interface with 1 public fields or methods. |
+| `ThinkingPlannerInput` | interface | <code>interface ThinkingPlannerInput</code> | Thinking Planner Input interface with 2 public fields or methods. |
+| `ToolActivityPort` | interface | <code>interface ToolActivityPort</code> | Tool Activity Port interface with 2 public fields or methods. |
+| `ToolActivityRequest` | interface | <code>interface ToolActivityRequest</code> | Tool Activity Request interface with 10 public fields or methods. |
+| `ToolActivityResult` | interface | <code>interface ToolActivityResult</code> | Tool Activity Result interface with 7 public fields or methods. |
+| `Verifier` | interface | <code>interface Verifier</code> | Verifier interface with 1 public fields or methods. |
+| `AgenticReasoningMode` | type | <code>type AgenticReasoningMode = 'react' &#124; 'fsm_react' &#124; 'tot' &#124; 'critique'</code> | Public type alias for Agentic Reasoning Mode; the declaration contains its complete type expression. |
+| `ReActPhase` | type | <code>type ReActPhase = 'observe' &#124; 'reason' &#124; 'select_action' &#124; 'policy_check' &#124; 'act' &#124; 'observe_result' &#124; 'verify' &#124; 'memory_sync' &#124; 'complete' &#124; 'fail' &#124; 'human_review' &#124; 'suspend' &#124; 'cancel'</code> | Public type alias for ReAct Phase; the declaration contains its complete type expression. |
+| `ReActSuspensionReason` | type | <code>type ReActSuspensionReason = (typeof REACT_SUSPENSION_REASONS)[number]</code> | Public type alias for ReAct Suspension Reason; the declaration contains its complete type expression. |
+| `ReasoningPersistence` | type | <code>type ReasoningPersistence = 'summary_only' &#124; 'events_only'</code> | Public type alias for Reasoning Persistence; the declaration contains its complete type expression. |
+| `ThinkingMode` | type | <code>type ThinkingMode = 'none' &#124; 'summary' &#124; 'structured'</code> | Public type alias for Thinking Mode; the declaration contains its complete type expression. |
 
-## `BasicReActAgentRuntime` public members
+## `BasicReActAgentRuntime`
+
+Basic ReAct Agent Runtime class with 4 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { BasicReActAgentRuntime } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class BasicReActAgentRuntime implements ReActAgentRuntime {
+    constructor(options?: BasicReActAgentRuntimeOptions);
+    reason(context: ReActRunContext): Promise<InferenceRequest>;
+    selectAction(response: InferenceResponse): Promise<ReActAction>;
+    verify(context: ReActRunContext, observation: ReActObservation): Promise<ReActAction>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(options?: BasicReActAgentRuntimeOptions): BasicReActAgentRuntime</code> | Creates an instance of this class. |
-| `reason` | method | <code>reason(context: ReActRunContext): Promise&lt;InferenceRequest&gt;</code> | Public runtime operation for reason. |
-| `selectAction` | method | <code>selectAction(response: InferenceResponse): Promise&lt;ReActAction&gt;</code> | Public runtime operation for select Action. |
-| `verify` | method | <code>verify(context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public runtime operation for verify. |
+| `reason` | method | <code>reason(context: ReActRunContext): Promise&lt;InferenceRequest&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `selectAction` | method | <code>selectAction(response: InferenceResponse): Promise&lt;ReActAction&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `verify` | method | <code>verify(context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `DefaultAgenticReasoner` public members
+## `DefaultAgenticReasoner`
+
+Default Agentic Reasoner class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { DefaultAgenticReasoner } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class DefaultAgenticReasoner implements AgenticReasoner {
+    constructor(now?: () => string);
+    decide(input: AgenticReasonerInput): Promise<AgenticReasoningDecision>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(now?: () =&gt; string): DefaultAgenticReasoner</code> | Creates an instance of this class. |
-| `decide` | method | <code>decide(input: AgenticReasonerInput): Promise&lt;AgenticReasoningDecision&gt;</code> | Decides decide at this module boundary. |
+| `decide` | method | <code>decide(input: AgenticReasonerInput): Promise&lt;AgenticReasoningDecision&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `DefaultContextBuilder` public members
+## `DefaultContextBuilder`
+
+Default Context Builder class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { DefaultContextBuilder } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class DefaultContextBuilder implements ContextBuilder {
+    build(input: ContextBuildInput): Promise<BuiltAgentContext>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Builds build at this module boundary. |
+| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(): DefaultContextBuilder</code> | Creates an instance of this class. |
 
-## `DefaultThinkingPlanner` public members
+## `DefaultThinkingPlanner`
+
+Default Thinking Planner class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { DefaultThinkingPlanner } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class DefaultThinkingPlanner implements ThinkingPlanner {
+    constructor(now?: () => string);
+    plan(input: ThinkingPlannerInput): Promise<ThinkingPlan>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(now?: () =&gt; string): DefaultThinkingPlanner</code> | Creates an instance of this class. |
-| `plan` | method | <code>plan(input: ThinkingPlannerInput): Promise&lt;ThinkingPlan&gt;</code> | Plans plan at this module boundary. |
+| `plan` | method | <code>plan(input: ThinkingPlannerInput): Promise&lt;ThinkingPlan&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `DefaultVerifier` public members
+## `DefaultVerifier`
+
+Default Verifier class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { DefaultVerifier } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class DefaultVerifier implements Verifier {
+    verify(_context: ReActRunContext, observation: ReActObservation): Promise<ReActAction>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(): DefaultVerifier</code> | Creates an instance of this class. |
-| `verify` | method | <code>verify(_context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public runtime operation for verify. |
+| `verify` | method | <code>verify(_context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `InMemoryReActContinuationCheckpointStore` public members
+## `InMemoryReActContinuationCheckpointStore`
+
+In Memory ReAct Continuation Checkpoint Store class with 4 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { InMemoryReActContinuationCheckpointStore } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class InMemoryReActContinuationCheckpointStore implements ReActContinuationCheckpointStore {
+    constructor(options?: InMemoryReActContinuationCheckpointStoreOptions);
+    put(input: ReActContinuationCheckpoint, idempotencyKey: string): Promise<ReActContinuationCheckpointPutResult>;
+    get(runId: string, stepId: string, expectedScopeHash: string): Promise<ReActContinuationCheckpoint | null>;
+    delete(runId: string, stepId: string, expectedScopeHash: string, expectedStepSequence?: number): Promise<boolean>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(options?: InMemoryReActContinuationCheckpointStoreOptions): InMemoryReActContinuationCheckpointStore</code> | Creates an instance of this class. |
-| `delete` | method | <code>delete(runId: string, stepId: string, expectedScopeHash: string, expectedStepSequence?: number): Promise&lt;boolean&gt;</code> | Deletes delete at this module boundary. |
-| `get` | method | <code>get(runId: string, stepId: string, expectedScopeHash: string): Promise&lt;ReActContinuationCheckpoint &#124; null&gt;</code> | Gets get at this module boundary. |
-| `put` | method | <code>put(input: ReActContinuationCheckpoint, idempotencyKey: string): Promise&lt;ReActContinuationCheckpointPutResult&gt;</code> | Public runtime operation for put. |
+| `delete` | method | <code>delete(runId: string, stepId: string, expectedScopeHash: string, expectedStepSequence?: number): Promise&lt;boolean&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get(runId: string, stepId: string, expectedScopeHash: string): Promise&lt;ReActContinuationCheckpoint &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `put` | method | <code>put(input: ReActContinuationCheckpoint, idempotencyKey: string): Promise&lt;ReActContinuationCheckpointPutResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `MemoryContextBuilder` public members
+## `MemoryContextBuilder`
+
+Memory Context Builder class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { MemoryContextBuilder } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class MemoryContextBuilder implements ContextBuilder {
+    constructor(options: MemoryContextBuilderOptions);
+    build(input: ContextBuildInput): Promise<BuiltAgentContext>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Builds build at this module boundary. |
+| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(options: MemoryContextBuilderOptions): MemoryContextBuilder</code> | Creates an instance of this class. |
 
-## `ReActAgentRunner` public members
+## `ReActAgentRunner`
+
+ReAct Agent Runner class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { ReActAgentRunner } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class ReActAgentRunner {
+    constructor(options: ReActAgentRunnerOptions);
+    run(input: ContextBuildInput, control?: ReActRunControl): Promise<ReActRunResult>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(options: ReActAgentRunnerOptions): ReActAgentRunner</code> | Creates an instance of this class. |
-| `run` | method | <code>run(input: ContextBuildInput, control?: ReActRunControl): Promise&lt;ReActRunResult&gt;</code> | Public runtime operation for run. |
+| `run` | method | <code>run(input: ContextBuildInput, control?: ReActRunControl): Promise&lt;ReActRunResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `ReActRunner` public members
+## `ReActRunner`
+
+ReAct Runner class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { ReActRunner } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class ReActRunner {
+    constructor(runtime: ReActAgentRuntime, options: ReActRunnerOptions);
+    run(context: ReActRunContext, control?: ReActRunControl): Promise<ReActRunResult>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
 | `constructor` | constructor | <code>(runtime: ReActAgentRuntime, options: ReActRunnerOptions): ReActRunner</code> | Creates an instance of this class. |
-| `run` | method | <code>run(context: ReActRunContext, control?: ReActRunControl): Promise&lt;ReActRunResult&gt;</code> | Public runtime operation for run. |
+| `run` | method | <code>run(context: ReActRunContext, control?: ReActRunControl): Promise&lt;ReActRunResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `ReasoningContextBuilder` public members
+## `ReasoningContextBuilder`
+
+Reasoning Context Builder class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { ReasoningContextBuilder } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class ReasoningContextBuilder implements ContextBuilder {
+    constructor(options?: ReasoningContextBuilderOptions);
+    build(input: ContextBuildInput): Promise<BuiltAgentContext>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Builds build at this module boundary. |
+| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(options?: ReasoningContextBuilderOptions): ReasoningContextBuilder</code> | Creates an instance of this class. |
 
-## `SkillContextBuilder` public members
+## `SkillContextBuilder`
+
+Skill Context Builder class with 2 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { SkillContextBuilder } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class SkillContextBuilder implements ContextBuilder {
+    constructor(options: SkillContextBuilderOptions);
+    build(input: ContextBuildInput): Promise<BuiltAgentContext>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Builds build at this module boundary. |
+| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(options: SkillContextBuilderOptions): SkillContextBuilder</code> | Creates an instance of this class. |
 
-## `ToolRunnerActivityAdapter` public members
+## `ToolRunnerActivityAdapter`
+
+Tool Runner Activity Adapter class with 3 public constructor or member entries; its exact declarations are listed below.
+
+- Kind: class
+- Import: `import { ToolRunnerActivityAdapter } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare class ToolRunnerActivityAdapter implements ToolActivityPort {
+    constructor(runner: ToolRunner);
+    execute(request: ToolActivityRequest): Promise<ToolActivityResult>;
+    cancel(invocationId: string, reason?: string): Promise<ToolActivityResult | null>;
+}
+```
+
+### Public members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `cancel` | method | <code>cancel(invocationId: string, reason?: string): Promise&lt;ToolActivityResult &#124; null&gt;</code> | Cancels cancel at this module boundary. |
+| `cancel` | method | <code>cancel(invocationId: string, reason?: string): Promise&lt;ToolActivityResult &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
 | `constructor` | constructor | <code>(runner: ToolRunner): ToolRunnerActivityAdapter</code> | Creates an instance of this class. |
-| `execute` | method | <code>execute(request: ToolActivityRequest): Promise&lt;ToolActivityResult&gt;</code> | Public runtime operation for execute. |
+| `execute` | method | <code>execute(request: ToolActivityRequest): Promise&lt;ToolActivityResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `AgenticReasoner` contract members
+## `agenticReasoningModeSchema`
+
+Runtime schema for Agentic Reasoning Mode.
+
+- Kind: constant
+- Import: `import { agenticReasoningModeSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const agenticReasoningModeSchema: z.ZodEnum<["react", "fsm_react", "tot", "critique"]>;
+```
+
+## `kernelSpecDefinitions`
+
+Kernel Spec Definitions constant exported by the `index` module.
+
+- Kind: constant
+- Import: `import { kernelSpecDefinitions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const kernelSpecDefinitions: readonly [SpecSchemaDefinition<ReActAgentSpec>, SpecSchemaDefinition<ReasoningConfig>];
+```
+
+## `kernelSpecJsonSchemas`
+
+Kernel Spec JSON Schemas constant exported by the `index` module.
+
+- Kind: constant
+- Import: `import { kernelSpecJsonSchemas } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const kernelSpecJsonSchemas: Record<string, JsonSchema>;
+```
+
+## `REACT_PHASE_ORDER`
+
+REACT PHASE ORDER constant exported by the `index` module.
+
+- Kind: constant
+- Import: `import { REACT_PHASE_ORDER } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const REACT_PHASE_ORDER: ReActPhase[];
+```
+
+## `REACT_SUSPENSION_REASONS`
+
+REACT SUSPENSION REASONS constant exported by the `index` module.
+
+- Kind: constant
+- Import: `import { REACT_SUSPENSION_REASONS } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const REACT_SUSPENSION_REASONS: readonly ["quantum_exhausted", "iteration_budget_exhausted", "model_call_budget_exhausted", "tool_call_budget_exhausted", "token_budget_exhausted", "non_progress", "deadline_exceeded"];
+```
+
+## `reActActionSchema`
+
+Runtime schema for Re Act Action.
+
+- Kind: constant
+- Import: `import { reActActionSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reActActionSchema: z.ZodEffects<z.ZodObject<{ type: z.ZodEnum<["tool", "model", "finish", "human_review"]>; toolCallId: z.ZodOptional<z.ZodString>; target: z.ZodOptional<z.ZodString>; input: z.ZodOptional<z.ZodEffects<z.ZodUnknown, unknown, unknown>>; reason: z.ZodOptional<z.ZodString>; }, "strict", z.ZodTypeAny, { type: "human_review" | "tool" | "model" | "finish"; reason?: string | undefined; toolCallId?: string | undefined; target?: string | undefined; input?: unknown; }, { type: "human_review" | "tool" | "model" | "finish"; reason?: string | undefined; toolCallId?: string | undefined; target?: string | undefined; input?: unknown; }>, { type: "human_review" | "tool" | "model" | "finish"; reason?: string | undefined; toolCallId?: string | undefined; target?: string | undefined; input?: unknown; }, { type: "human_review" | "tool" | "model" | "finish"; reason?: string | undefined; toolCallId?: string | undefined; target?: string | undefined; input?: unknown; }>;
+```
+
+## `reactAgentSpecDefinition`
+
+Runtime validation entrypoint for the React Agent spec, combining its parser, example and JSON Schema.
+
+- Kind: constant
+- Import: `import { reactAgentSpecDefinition } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reactAgentSpecDefinition: SpecSchemaDefinition<ReActAgentSpec>;
+```
+
+## `reactAgentSpecExample`
+
+Valid example value for React Agent Spec.
+
+- Kind: constant
+- Import: `import { reactAgentSpecExample } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reactAgentSpecExample: ReActAgentSpec;
+```
+
+## `reactAgentSpecJsonSchema`
+
+JSON Schema for React Agent Spec.
+
+- Kind: constant
+- Import: `import { reactAgentSpecJsonSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reactAgentSpecJsonSchema: JsonSchema;
+```
+
+## `reactAgentSpecSchema`
+
+Runtime schema for React Agent Spec.
+
+- Kind: constant
+- Import: `import { reactAgentSpecSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+// Exact type resolved from the package entrypoint; see source for the compiler expansion.
+export declare const reactAgentSpecSchema: (typeof import('@codesoul-co/hypha-kernel'))['reactAgentSpecSchema'];
+```
+
+> This compiler-expanded constant type is compacted. Its public name, top-level type, and source location remain here; use the module’s exported interfaces, types, or runtime schema for input/output fields.
+
+## `reActContinuationCheckpointJsonSchema`
+
+JSON Schema for Re Act Continuation Checkpoint.
+
+- Kind: constant
+- Import: `import { reActContinuationCheckpointJsonSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reActContinuationCheckpointJsonSchema: JsonSchema;
+```
+
+## `reActContinuationCheckpointSchema`
+
+Runtime schema for Re Act Continuation Checkpoint.
+
+- Kind: constant
+- Import: `import { reActContinuationCheckpointSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+// Exact type resolved from the package entrypoint; see source for the compiler expansion.
+export declare const reActContinuationCheckpointSchema: (typeof import('@codesoul-co/hypha-kernel'))['reActContinuationCheckpointSchema'];
+```
+
+> This compiler-expanded constant type is compacted. Its public name, top-level type, and source location remain here; use the module’s exported interfaces, types, or runtime schema for input/output fields.
+
+## `reActExecutionBudgetJsonSchema`
+
+JSON Schema for Re Act Execution Budget.
+
+- Kind: constant
+- Import: `import { reActExecutionBudgetJsonSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reActExecutionBudgetJsonSchema: JsonSchema;
+```
+
+## `reActExecutionBudgetSchema`
+
+Runtime schema for Re Act Execution Budget.
+
+- Kind: constant
+- Import: `import { reActExecutionBudgetSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reActExecutionBudgetSchema: z.ZodObject<{ maxIterations: z.ZodNumber; maxModelCalls: z.ZodNumber; maxToolCalls: z.ZodNumber; maxTotalTokens: z.ZodOptional<z.ZodNumber>; maxConsecutiveNoProgress: z.ZodNumber; quantumIterations: z.ZodNumber; deadlineAt: z.ZodOptional<z.ZodString>; }, "strict", z.ZodTypeAny, { maxIterations: number; maxModelCalls: number; maxToolCalls: number; maxConsecutiveNoProgress: number; quantumIterations: number; maxTotalTokens?: number | undefined; deadlineAt?: string | undefined; }, { maxIterations: number; maxModelCalls: number; maxToolCalls: number; maxConsecutiveNoProgress: number; quantumIterations: number; maxTotalTokens?: number | undefined; deadlineAt?: string | undefined; }>;
+```
+
+## `reactPhaseSchema`
+
+Runtime schema for React Phase.
+
+- Kind: constant
+- Import: `import { reactPhaseSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reactPhaseSchema: z.ZodEnum<["observe", "reason", "select_action", "policy_check", "act", "observe_result", "verify", "memory_sync", "complete", "fail", "human_review", "suspend", "cancel"]>;
+```
+
+## `reasoningConfigExample`
+
+Valid example value for Reasoning Config.
+
+- Kind: constant
+- Import: `import { reasoningConfigExample } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reasoningConfigExample: ReasoningConfig;
+```
+
+## `reasoningConfigJsonSchema`
+
+JSON Schema for Reasoning Config.
+
+- Kind: constant
+- Import: `import { reasoningConfigJsonSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reasoningConfigJsonSchema: JsonSchema;
+```
+
+## `reasoningConfigSchema`
+
+Runtime schema for Reasoning Config.
+
+- Kind: constant
+- Import: `import { reasoningConfigSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reasoningConfigSchema: z.ZodObject<{ thinkingMode: z.ZodOptional<z.ZodEnum<["none", "summary", "structured"]>>; agenticMode: z.ZodOptional<z.ZodEnum<["react", "fsm_react", "tot", "critique"]>>; maxSteps: z.ZodOptional<z.ZodNumber>; persist: z.ZodOptional<z.ZodEnum<["summary_only", "events_only"]>>; plannerRef: z.ZodOptional<z.ZodString>; reasonerRef: z.ZodOptional<z.ZodString>; metadata: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>; }, "strip", z.ZodTypeAny, { thinkingMode?: "none" | "summary" | "structured" | undefined; agenticMode?: "react" | "fsm_react" | "tot" | "critique" | undefined; maxSteps?: number | undefined; persist?: "summary_only" | "events_only" | undefined; plannerRef?: string | undefined; reasonerRef?: string | undefined; metadata?: Record<string, unknown> | undefined; }, { thinkingMode?: "none" | "summary" | "structured" | undefined; agenticMode?: "react" | "fsm_react" | "tot" | "critique" | undefined; maxSteps?: number | undefined; persist?: "summary_only" | "events_only" | undefined; plannerRef?: string | undefined; reasonerRef?: string | undefined; metadata?: Record<string, unknown> | undefined; }>;
+```
+
+## `reasoningConfigSpecDefinition`
+
+Runtime validation entrypoint for the Reasoning Config spec, combining its parser, example and JSON Schema.
+
+- Kind: constant
+- Import: `import { reasoningConfigSpecDefinition } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reasoningConfigSpecDefinition: SpecSchemaDefinition<ReasoningConfig>;
+```
+
+## `reasoningPersistenceSchema`
+
+Runtime schema for Reasoning Persistence.
+
+- Kind: constant
+- Import: `import { reasoningPersistenceSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const reasoningPersistenceSchema: z.ZodEnum<["summary_only", "events_only"]>;
+```
+
+## `thinkingModeSchema`
+
+Runtime schema for Thinking Mode.
+
+- Kind: constant
+- Import: `import { thinkingModeSchema } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare const thinkingModeSchema: z.ZodEnum<["none", "summary", "structured"]>;
+```
+
+## `createEpisodicMemorySync`
+
+Create Episodic Memory Sync function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { createEpisodicMemorySync } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function createEpisodicMemorySync(options: EpisodicMemorySyncOptions): NonNullable<ReActRunnerOptions['syncMemory']>;
+```
+
+### Call signature
+
+```text
+createEpisodicMemorySync(options: EpisodicMemorySyncOptions): NonNullable<ReActRunnerOptions["syncMemory"]>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `options` | <code>EpisodicMemorySyncOptions</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `(context: ReActRunContext, observation: ReActObservation) => Promise<void>`
+- Description: The return contract is defined by the type shown above.
+
+## `createReActStep`
+
+Create ReAct Step function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { createReActStep } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function createReActStep(id: string, phase: ReActPhase, input?: unknown): ReActStep;
+```
+
+### Call signature
+
+```text
+createReActStep(id: string, phase: ReActPhase, input?: unknown): ReActStep
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | <code>string</code> | Yes | Required parameter; accepted values are defined by the type column. |
+| `phase` | <code>ReActPhase</code> | Yes | Required parameter; accepted values are defined by the type column. |
+| `input` | <code>unknown</code> | No | Optional parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `ReActStep`
+- Description: The return contract is defined by the type shown above.
+
+## `reActContinuationScopeHash`
+
+Re Act Continuation Scope Hash function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { reActContinuationScopeHash } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function reActContinuationScopeHash(context: ReActRunContext): string;
+```
+
+### Call signature
+
+```text
+reActContinuationScopeHash(context: ReActRunContext): string
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `context` | <code>ReActRunContext</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `string`
+- Description: The return contract is defined by the type shown above.
+
+## `validateReActAction`
+
+Validate ReAct Action function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { validateReActAction } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function validateReActAction(input: unknown): ReActAction;
+```
+
+### Call signature
+
+```text
+validateReActAction(input: unknown): ReActAction
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | <code>unknown</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `ReActAction`
+- Description: The return contract is defined by the type shown above.
+
+## `validateReActAgentSpec`
+
+Validate ReAct Agent Spec function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { validateReActAgentSpec } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function validateReActAgentSpec(input: unknown): ReActAgentSpec;
+```
+
+### Call signature
+
+```text
+validateReActAgentSpec(input: unknown): ReActAgentSpec
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | <code>unknown</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `ReActAgentSpec`
+- Description: The return contract is defined by the type shown above.
+
+## `validateReActContinuationCheckpoint`
+
+Validate ReAct Continuation Checkpoint function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { validateReActContinuationCheckpoint } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function validateReActContinuationCheckpoint(input: unknown): ReActContinuationCheckpoint;
+```
+
+### Call signature
+
+```text
+validateReActContinuationCheckpoint(input: unknown): ReActContinuationCheckpoint
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | <code>unknown</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `ReActContinuationCheckpoint`
+- Description: The return contract is defined by the type shown above.
+
+## `validateReActExecutionBudget`
+
+Validate ReAct Execution Budget function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { validateReActExecutionBudget } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function validateReActExecutionBudget(input: unknown): ReActExecutionBudget;
+```
+
+### Call signature
+
+```text
+validateReActExecutionBudget(input: unknown): ReActExecutionBudget
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | <code>unknown</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `ReActExecutionBudget`
+- Description: The return contract is defined by the type shown above.
+
+## `validateReasoningConfig`
+
+Validate Reasoning Config function with 1 public call signature; parameters and return types are listed below.
+
+- Kind: function
+- Import: `import { validateReasoningConfig } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export declare function validateReasoningConfig(input: unknown): ReasoningConfig;
+```
+
+### Call signature
+
+```text
+validateReasoningConfig(input: unknown): ReasoningConfig
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | <code>unknown</code> | Yes | Required parameter; accepted values are defined by the type column. |
+
+#### Returns
+
+- Type: `ReasoningConfig`
+- Description: The return contract is defined by the type shown above.
+
+## `AgenticReasoner`
+
+Agentic Reasoner interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { AgenticReasoner } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface AgenticReasoner {
+    decide(input: AgenticReasonerInput): Promise<AgenticReasoningDecision>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `decide` | method | <code>decide(input: AgenticReasonerInput): Promise&lt;AgenticReasoningDecision&gt;</code> | Decides decide at this module boundary. |
+| `decide` | method | <code>decide(input: AgenticReasonerInput): Promise&lt;AgenticReasoningDecision&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `AgenticReasonerInput` contract members
+## `AgenticReasonerInput`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `config` | property | <code>config: RequiredReasoningConfig</code> | Public config property. |
-| `context` | property | <code>context: BuiltAgentContext</code> | Public context property. |
-| `thinkingPlan` | property | <code>thinkingPlan: ThinkingPlan</code> | Public thinking Plan property. |
+Agentic Reasoner Input interface with 3 public fields or methods.
 
-## `AgenticReasoningDecision` contract members
+- Kind: interface
+- Import: `import type { AgenticReasonerInput } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `actionType` | property | <code>actionType: "human_review" &#124; "tool" &#124; "model" &#124; "reason" &#124; "finish"</code> | Public action Type property. |
-| `confidence` | property | <code>confidence: number</code> | Public confidence property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `mode` | property | <code>mode: AgenticReasoningMode</code> | Public mode property. |
-| `rationale` | property | <code>rationale: string</code> | Public rationale property. |
-| `recommendedPhase` | property | <code>recommendedPhase: ReActPhase</code> | Public recommended Phase property. |
-| `requiresHumanReview` | property | <code>requiresHumanReview: boolean</code> | Public requires Human Review property. |
-| `toolCandidates` | property | <code>toolCandidates: string[]</code> | Public tool Candidates property. |
-| `verificationStrategy` | property | <code>verificationStrategy: string</code> | Public verification Strategy property. |
+### Declaration
 
-## `BasicReActAgentRuntimeOptions` contract members
+```text
+export interface AgenticReasonerInput {
+    context: BuiltAgentContext;
+    config: RequiredReasoningConfig;
+    thinkingPlan?: ThinkingPlan;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `verifier` | property | <code>verifier: Verifier</code> | Public verifier property. |
+| `config` | property | <code>config: RequiredReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `context` | property | <code>context: BuiltAgentContext</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `thinkingPlan` | property | <code>thinkingPlan?: ThinkingPlan</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `BuiltAgentContext` contract members
+## `AgenticReasoningDecision`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `activeSkills` | property | <code>activeSkills: LoadedSkillContext[]</code> | Public active Skills property. |
-| `agent` | property | <code>agent: ReActAgentSpec</code> | Public agent property. |
-| `contextBudget` | property | <code>contextBudget: ContextBudget</code> | Public context Budget property. |
-| `contextProvenance` | property | <code>contextProvenance: ContextProvenance[]</code> | Public context Provenance property. |
-| `contextSpec` | property | <code>contextSpec: ContextSpec</code> | Public context Spec property. |
-| `memoryContext` | property | <code>memoryContext: MemoryContextItem[]</code> | Public memory Context property. |
-| `memoryScope` | property | <code>memoryScope: MemoryScope</code> | Public memory Scope property. |
-| `messages` | property | <code>messages: ModelMessage[]</code> | Public messages property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `reasoningConfig` | property | <code>reasoningConfig: ReasoningConfig</code> | Public reasoning Config property. |
-| `reasoningDecision` | property | <code>reasoningDecision: AgenticReasoningDecision</code> | Public reasoning Decision property. |
-| `rejectedSkills` | property | <code>rejectedSkills: { skillId: string; reason: string; }[]</code> | Public rejected Skills property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sourceInput` | property | <code>sourceInput: unknown</code> | Public source Input property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `thinkingPlan` | property | <code>thinkingPlan: ThinkingPlan</code> | Public thinking Plan property. |
-| `toolExecutionScope` | property | <code>toolExecutionScope: ToolExecutionScope</code> | Public tool Execution Scope property. |
-| `toolPrincipal` | property | <code>toolPrincipal: ToolPrincipal</code> | Public tool Principal property. |
+Agentic Reasoning Decision interface with 11 public fields or methods.
 
-## `ContextBudget` contract members
+- Kind: interface
+- Import: `import type { AgenticReasoningDecision } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `maxMemoryChars` | property | <code>maxMemoryChars: number</code> | Public max Memory Chars property. |
-| `maxMemoryItems` | property | <code>maxMemoryItems: number</code> | Public max Memory Items property. |
-| `maxMessages` | property | <code>maxMessages: number</code> | Public max Messages property. |
-| `maxTotalChars` | property | <code>maxTotalChars: number</code> | Public max Total Chars property. |
+### Declaration
 
-## `ContextBuilder` contract members
+```text
+export interface AgenticReasoningDecision {
+    id: string;
+    mode: AgenticReasoningMode;
+    recommendedPhase: ReActPhase;
+    actionType: 'reason' | ReActAction['type'];
+    toolCandidates: string[];
+    requiresHumanReview: boolean;
+    verificationStrategy: string;
+    rationale: string;
+    confidence?: number;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Builds build at this module boundary. |
+| `actionType` | property | <code>actionType: "human_review" &#124; "tool" &#124; "model" &#124; "reason" &#124; "finish"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `confidence` | property | <code>confidence?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: AgenticReasoningMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rationale` | property | <code>rationale: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `recommendedPhase` | property | <code>recommendedPhase: ReActPhase</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requiresHumanReview` | property | <code>requiresHumanReview: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolCandidates` | property | <code>toolCandidates: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `verificationStrategy` | property | <code>verificationStrategy: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ContextBuildInput` contract members
+## `BasicReActAgentRuntimeOptions`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agent` | property | <code>agent: ReActAgentSpec</code> | Public agent property. |
-| `contextSpec` | property | <code>contextSpec: ContextSpec</code> | Public context Spec property. |
-| `input` | property | <code>input: TInput</code> | Public input property. |
-| `memoryScope` | property | <code>memoryScope: MemoryScope</code> | Public memory Scope property. |
-| `messages` | property | <code>messages: ModelMessage[]</code> | Public messages property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `sessionId` | property | <code>sessionId: string</code> | Public session Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `toolExecutionScope` | property | <code>toolExecutionScope: ToolExecutionScope</code> | Public tool Execution Scope property. |
-| `toolPrincipal` | property | <code>toolPrincipal: ToolPrincipal</code> | Public tool Principal property. |
-| `userId` | property | <code>userId: string</code> | Public user Id property. |
+Basic ReAct Agent Runtime Options interface with 1 public fields or methods.
 
-## `ContextProvenance` contract members
+- Kind: interface
+- Import: `import type { BasicReActAgentRuntimeOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `includedAt` | property | <code>includedAt: string</code> | Public included At property. |
-| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public provenance property. |
-| `score` | property | <code>score: number</code> | Public score property. |
-| `source` | property | <code>source: "memory" &#124; "skill" &#124; "system" &#124; "input"</code> | Public source property. |
-| `type` | property | <code>type: string</code> | Public type property. |
+### Declaration
 
-## `EpisodicMemorySyncOptions` contract members
+```text
+export interface BasicReActAgentRuntimeOptions {
+    verifier?: Verifier;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `allowLongTerm` | property | <code>allowLongTerm: boolean</code> | Public allow Long Term property. |
-| `confidence` | property | <code>confidence: number</code> | Public confidence property. |
-| `idPrefix` | property | <code>idPrefix: string</code> | Public id Prefix property. |
-| `memory` | property | <code>memory: Pick&lt;MemoryManager, "write"&gt;</code> | Public memory property. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `source` | property | <code>source: string</code> | Public source property. |
-| `visibility` | property | <code>visibility: "workspace" &#124; "private" &#124; "public"</code> | Public visibility property. |
+| `verifier` | property | <code>verifier?: Verifier</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `InMemoryReActContinuationCheckpointStoreOptions` contract members
+## `BuiltAgentContext`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `maxCheckpointBytes` | property | <code>maxCheckpointBytes: number</code> | Public max Checkpoint Bytes property. |
-| `maxCheckpoints` | property | <code>maxCheckpoints: number</code> | Public max Checkpoints property. |
-| `maxIdempotencyRecords` | property | <code>maxIdempotencyRecords: number</code> | Public max Idempotency Records property. |
+Built Agent Context interface with 18 public fields or methods.
 
-## `MemoryContextBuilderOptions` contract members
+- Kind: interface
+- Import: `import type { BuiltAgentContext } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `baseBuilder` | property | <code>baseBuilder: ContextBuilder</code> | Public base Builder property. |
-| `budget` | property | <code>budget: ContextBudget</code> | Public budget property. |
-| `embeddings` | property | <code>embeddings: EmbeddingProvider</code> | Public embeddings property. |
-| `memory` | property | <code>memory: Pick&lt;MemoryManager, "search"&gt;</code> | Public memory property. |
-| `memoryTypes` | property | <code>memoryTypes: MemoryType[]</code> | Public memory Types property. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `query` | property | <code>query: MemorySearchQuery &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; MemorySearchQuery &#124; Promise&lt;MemorySearchQuery&gt;)</code> | Public query property. |
+### Declaration
 
-## `MemoryContextItem` contract members
+```text
+export interface BuiltAgentContext extends ReActRunContext {
+    sourceInput?: unknown;
+    contextBudget?: ContextBudget;
+    contextProvenance?: ContextProvenance[];
+    memoryContext?: MemoryContextItem[];
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `content` | property | <code>content: string</code> | Public content property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public provenance property. |
-| `score` | property | <code>score: number</code> | Public score property. |
-| `type` | property | <code>type: MemoryType</code> | Public type property. |
+| `activeSkills` | property | <code>activeSkills?: LoadedSkillContext[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `agent` | property | <code>agent: ReActAgentSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextBudget` | property | <code>contextBudget?: ContextBudget</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextProvenance` | property | <code>contextProvenance?: ContextProvenance[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextSpec` | property | <code>contextSpec?: ContextSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryContext` | property | <code>memoryContext?: MemoryContextItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryScope` | property | <code>memoryScope?: MemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messages` | property | <code>messages: ModelMessage[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoningConfig` | property | <code>reasoningConfig?: ReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoningDecision` | property | <code>reasoningDecision?: AgenticReasoningDecision</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rejectedSkills` | property | <code>rejectedSkills?: { skillId: string; reason: string; }[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceInput` | property | <code>sourceInput?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `thinkingPlan` | property | <code>thinkingPlan?: ThinkingPlan</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolExecutionScope` | property | <code>toolExecutionScope?: ToolExecutionScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolPrincipal` | property | <code>toolPrincipal?: ToolPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReActAction` contract members
+## `ContextBudget`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `input` | property | <code>input: unknown</code> | Public input property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `target` | property | <code>target: string</code> | Public target property. |
-| `toolCallId` | property | <code>toolCallId: string</code> | Public tool Call Id property. |
-| `type` | property | <code>type: "human_review" &#124; "tool" &#124; "model" &#124; "finish"</code> | Public type property. |
+Context Budget interface with 4 public fields or methods.
 
-## `ReActAgentRunnerOptions` contract members
+- Kind: interface
+- Import: `import type { ContextBudget } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agenticReasoner` | property | <code>agenticReasoner: AgenticReasoner</code> | Public agentic Reasoner property. |
-| `allowedSkills` | property | <code>allowedSkills: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public allowed Skills property. |
-| `checkpointStore` | property | <code>checkpointStore: ReActContinuationCheckpointStore</code> | Public checkpoint Store property. |
-| `contextBuilder` | property | <code>contextBuilder: ContextBuilder</code> | Public context Builder property. |
-| `continueAfterTool` | property | <code>continueAfterTool: boolean</code> | Public continue After Tool property. |
-| `executionBudget` | property | <code>executionBudget: Partial&lt;ReActExecutionBudget&gt;</code> | Public execution Budget property. |
-| `inference` | property | <code>inference: InferenceProvider</code> | Public inference property. |
-| `maxIterations` | property | <code>maxIterations: number</code> | Public max Iterations property. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `onCheckpoint` | method | <code>onCheckpoint(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Handles Checkpoint at this module boundary. |
-| `onResume` | method | <code>onResume(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Handles Resume at this module boundary. |
-| `onStep` | method | <code>onStep(step: ReActStep): Promise&lt;void&gt; &#124; void</code> | Handles Step at this module boundary. |
-| `reasoningConfig` | property | <code>reasoningConfig: ReasoningConfig</code> | Public reasoning Config property. |
-| `requiredSkills` | property | <code>requiredSkills: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public required Skills property. |
-| `resolveToolExecutionScope` | method | <code>resolveToolExecutionScope(context: ReActRunContext, action: ReActAction): ToolExecutionScope &#124; undefined</code> | Resolves Tool Execution Scope at this module boundary. |
-| `retainCheckpointUntilOutcome` | property | <code>retainCheckpointUntilOutcome: boolean</code> | Keep the latest durable checkpoint until an outer transaction records the terminal/waiting outcome. Production quantum executors use this to avoid an unrecoverable gap between Runner completion and Event persistence. |
-| `runtime` | property | <code>runtime: ReActAgentRuntime</code> | Public runtime property. |
-| `skillContextLoader` | property | <code>skillContextLoader: SkillContextLoader</code> | Public skill Context Loader property. |
-| `skillPolicy` | property | <code>skillPolicy: SkillPolicy</code> | Public skill Policy property. |
-| `skillRegistry` | property | <code>skillRegistry: SkillRegistry</code> | Public skill Registry property. |
-| `skillSelector` | property | <code>skillSelector: SkillSelector</code> | Public skill Selector property. |
-| `syncMemory` | method | <code>syncMemory(context: ReActRunContext, observation: ReActObservation): Promise&lt;void&gt;</code> | Public runtime operation for sync Memory. |
-| `thinkingPlanner` | property | <code>thinkingPlanner: ThinkingPlanner</code> | Public thinking Planner property. |
-| `toolRunner` | property | <code>toolRunner: ToolRunner</code> | Public tool Runner property. |
-| `verifier` | property | <code>verifier: Verifier</code> | Public verifier property. |
+### Declaration
 
-## `ReActAgentRuntime` contract members
+```text
+export interface ContextBudget {
+    maxMessages?: number;
+    maxMemoryItems?: number;
+    maxMemoryChars?: number;
+    maxTotalChars?: number;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `reason` | method | <code>reason(context: ReActRunContext): Promise&lt;InferenceRequest&gt;</code> | Public runtime operation for reason. |
-| `selectAction` | method | <code>selectAction(response: InferenceResponse): Promise&lt;ReActAction&gt;</code> | Public runtime operation for select Action. |
-| `verify` | method | <code>verify(context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public runtime operation for verify. |
+| `maxMemoryChars` | property | <code>maxMemoryChars?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxMemoryItems` | property | <code>maxMemoryItems?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxMessages` | property | <code>maxMessages?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxTotalChars` | property | <code>maxTotalChars?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReActAgentSpec` contract members
+## `ContextBuilder`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `contextSpecRef` | property | <code>contextSpecRef: SpecRef</code> | Public context Spec Ref property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `description` | property | <code>description: string</code> | Public description property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `memoryProfileRef` | property | <code>memoryProfileRef: string</code> | Public memory Profile Ref property. |
-| `modelAlias` | property | <code>modelAlias: string</code> | Public model Alias property. |
-| `name` | property | <code>name: string</code> | Public name property. |
-| `owner` | property | <code>owner: string</code> | Public owner property. |
-| `policyRefs` | property | <code>policyRefs: string[]</code> | Public policy Refs property. |
-| `promptRefs` | property | <code>promptRefs: AgentPromptRef[]</code> | Public prompt Refs property. |
-| `reasoning` | property | <code>reasoning: ReasoningConfig</code> | Public reasoning property. |
-| `skillRefs` | property | <code>skillRefs: SkillRef[]</code> | Public skill Refs property. |
-| `systemInstructions` | property | <code>systemInstructions: string</code> | Public system Instructions property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `toolRefs` | property | <code>toolRefs: string[]</code> | Public tool Refs property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: string</code> | Public version property. |
+Context Builder interface with 1 public fields or methods.
 
-## `ReActContinuationCheckpoint` contract members
+- Kind: interface
+- Import: `import type { ContextBuilder } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ContextBuilder {
+    build(input: ContextBuildInput): Promise<BuiltAgentContext>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `agentRef` | property | <code>agentRef: SpecRef</code> | Public agent Ref property. |
-| `consecutiveNoProgress` | property | <code>consecutiveNoProgress: number</code> | Public consecutive No Progress property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `iterations` | property | <code>iterations: number</code> | Public iterations property. |
-| `lastProgressFingerprint` | property | <code>lastProgressFingerprint: string</code> | Public last Progress Fingerprint property. |
-| `messages` | property | <code>messages: ModelMessage[]</code> | Public messages property. |
-| `modelCalls` | property | <code>modelCalls: number</code> | Public model Calls property. |
-| `nextPhase` | property | <code>nextPhase: "reason" &#124; "act"</code> | Public next Phase property. |
-| `pendingAction` | property | <code>pendingAction: ReActAction</code> | Public pending Action property. |
-| `pendingToolInvocationId` | property | <code>pendingToolInvocationId: string</code> | Public pending Tool Invocation Id property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `scopeHash` | property | <code>scopeHash: string</code> | Public scope Hash property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `stepSequence` | property | <code>stepSequence: number</code> | Public step Sequence property. |
-| `toolCalls` | property | <code>toolCalls: number</code> | Public tool Calls property. |
-| `toolInvocationSequence` | property | <code>toolInvocationSequence: number</code> | Public tool Invocation Sequence property. |
-| `totalTokens` | property | <code>totalTokens: number</code> | Public total Tokens property. |
-| `updatedAt` | property | <code>updatedAt: string</code> | Public updated At property. |
-| `version` | property | <code>version: "1.0.0"</code> | Public version property. |
+| `build` | method | <code>build(input: ContextBuildInput): Promise&lt;BuiltAgentContext&gt;</code> | Public method; parameters and return type are shown in the signature. |
 
-## `ReActContinuationCheckpointPutResult` contract members
+## `ContextBuildInput`
+
+Context Build Input interface with 12 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextBuildInput } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ContextBuildInput<TInput = unknown> {
+    runId: string;
+    stepId: string;
+    sessionId?: string;
+    userId?: string;
+    agent: ReActAgentSpec;
+    input: TInput;
+    messages?: ModelMessage[];
+    memoryScope?: MemoryScope;
+    contextSpec?: ContextSpec;
+    metadata?: Record<string, unknown>;
+    toolExecutionScope?: ToolExecutionScope;
+    toolPrincipal?: ToolPrincipal;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `checkpoint` | property | <code>checkpoint: ReActContinuationCheckpoint</code> | Public checkpoint property. |
-| `reused` | property | <code>reused: boolean</code> | Public reused property. |
+| `agent` | property | <code>agent: ReActAgentSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextSpec` | property | <code>contextSpec?: ContextSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input: TInput</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryScope` | property | <code>memoryScope?: MemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messages` | property | <code>messages?: ModelMessage[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sessionId` | property | <code>sessionId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolExecutionScope` | property | <code>toolExecutionScope?: ToolExecutionScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolPrincipal` | property | <code>toolPrincipal?: ToolPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `userId` | property | <code>userId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReActContinuationCheckpointStore` contract members
+## `ContextProvenance`
+
+Context Provenance interface with 6 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ContextProvenance } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ContextProvenance {
+    source: 'memory' | 'input' | 'system' | 'skill';
+    id: string;
+    type?: string;
+    score?: number;
+    provenance?: Record<string, unknown>;
+    includedAt: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `delete` | method | <code>delete(runId: string, stepId: string, expectedScopeHash: string, expectedStepSequence?: number): Promise&lt;boolean&gt;</code> | Deletes delete at this module boundary. |
-| `get` | method | <code>get(runId: string, stepId: string, expectedScopeHash: string): Promise&lt;ReActContinuationCheckpoint &#124; null&gt;</code> | Gets get at this module boundary. |
-| `put` | method | <code>put(checkpoint: ReActContinuationCheckpoint, idempotencyKey: string): Promise&lt;ReActContinuationCheckpointPutResult&gt;</code> | Public runtime operation for put. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includedAt` | property | <code>includedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenance` | property | <code>provenance?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `score` | property | <code>score?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `source` | property | <code>source: "memory" &#124; "skill" &#124; "system" &#124; "input"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReActExecutionBudget` contract members
+## `EpisodicMemorySyncOptions`
+
+Episodic Memory Sync Options interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { EpisodicMemorySyncOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface EpisodicMemorySyncOptions {
+    memory: Pick<MemoryManager, 'write'>;
+    now?: () => string;
+    source?: string;
+    idPrefix?: string;
+    confidence?: number;
+    visibility?: MemoryRecord['visibility'];
+    allowLongTerm?: boolean;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowLongTerm` | property | <code>allowLongTerm?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `confidence` | property | <code>confidence?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idPrefix` | property | <code>idPrefix?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memory` | property | <code>memory: Pick&lt;MemoryManager, "write"&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `source` | property | <code>source?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `visibility` | property | <code>visibility?: "workspace" &#124; "private" &#124; "public"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `InMemoryReActContinuationCheckpointStoreOptions`
+
+In Memory ReAct Continuation Checkpoint Store Options interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { InMemoryReActContinuationCheckpointStoreOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface InMemoryReActContinuationCheckpointStoreOptions {
+    maxCheckpoints?: number;
+    maxIdempotencyRecords?: number;
+    maxCheckpointBytes?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `maxCheckpointBytes` | property | <code>maxCheckpointBytes?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxCheckpoints` | property | <code>maxCheckpoints?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxIdempotencyRecords` | property | <code>maxIdempotencyRecords?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryContextBuilderOptions`
+
+Memory Context Builder Options interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryContextBuilderOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryContextBuilderOptions {
+    memory: Pick<MemoryManager, 'search'>;
+    embeddings?: EmbeddingProvider;
+    baseBuilder?: ContextBuilder;
+    budget?: ContextBudget;
+    memoryTypes?: MemoryType[];
+    now?: () => string;
+    query?: MemorySearchQuery | ((input: ContextBuildInput, base: BuiltAgentContext) => MemorySearchQuery | Promise<MemorySearchQuery>);
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `baseBuilder` | property | <code>baseBuilder?: ContextBuilder</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `budget` | property | <code>budget?: ContextBudget</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `embeddings` | property | <code>embeddings?: EmbeddingProvider</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memory` | property | <code>memory: Pick&lt;MemoryManager, "search"&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryTypes` | property | <code>memoryTypes?: MemoryType[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `query` | property | <code>query?: MemorySearchQuery &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; MemorySearchQuery &#124; Promise&lt;MemorySearchQuery&gt;)</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryContextItem`
+
+Memory Context Item interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryContextItem } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface MemoryContextItem {
+    id: string;
+    type: MemoryType;
+    content: string;
+    score?: number;
+    provenance: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `content` | property | <code>content: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `score` | property | <code>score?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: MemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActAction`
+
+ReAct Action interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActAction } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActAction {
+    type: 'tool' | 'model' | 'finish' | 'human_review';
+    toolCallId?: string;
+    target?: string;
+    input?: unknown;
+    reason?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `input` | property | <code>input?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `target` | property | <code>target?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolCallId` | property | <code>toolCallId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `type` | property | <code>type: "human_review" &#124; "tool" &#124; "model" &#124; "finish"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActAgentRunnerOptions`
+
+ReAct Agent Runner Options interface with 25 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActAgentRunnerOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActAgentRunnerOptions extends Omit<ReActRunnerOptions, 'toolRunner'> {
+    toolRunner?: ToolRunner;
+    contextBuilder?: ContextBuilder;
+    verifier?: Verifier;
+    runtime?: ReActAgentRuntime;
+    thinkingPlanner?: ThinkingPlanner;
+    agenticReasoner?: AgenticReasoner;
+    reasoningConfig?: ReasoningConfig;
+    skillRegistry?: SkillRegistry;
+    skillSelector?: SkillSelector;
+    skillContextLoader?: SkillContextLoader;
+    skillPolicy?: SkillPolicy;
+    allowedSkills?: SkillContextBuilderOptions['allowedSkills'];
+    requiredSkills?: SkillContextBuilderOptions['requiredSkills'];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agenticReasoner` | property | <code>agenticReasoner?: AgenticReasoner</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `allowedSkills` | property | <code>allowedSkills?: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `checkpointStore` | property | <code>checkpointStore?: ReActContinuationCheckpointStore</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextBuilder` | property | <code>contextBuilder?: ContextBuilder</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `continueAfterTool` | property | <code>continueAfterTool?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `executionBudget` | property | <code>executionBudget?: Partial&lt;ReActExecutionBudget&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `inference` | property | <code>inference: InferenceProvider</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxIterations` | property | <code>maxIterations?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `onCheckpoint` | method | <code>onCheckpoint?(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Public method; parameters and return type are shown in the signature. |
+| `onResume` | method | <code>onResume?(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Public method; parameters and return type are shown in the signature. |
+| `onStep` | method | <code>onStep?(step: ReActStep): Promise&lt;void&gt; &#124; void</code> | Public method; parameters and return type are shown in the signature. |
+| `reasoningConfig` | property | <code>reasoningConfig?: ReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requiredSkills` | property | <code>requiredSkills?: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resolveToolExecutionScope` | method | <code>resolveToolExecutionScope?(context: ReActRunContext, action: ReActAction): ToolExecutionScope &#124; undefined</code> | Public method; parameters and return type are shown in the signature. |
+| `retainCheckpointUntilOutcome` | property | <code>retainCheckpointUntilOutcome?: boolean</code> | Keep the latest durable checkpoint until an outer transaction records the terminal/waiting outcome. Production quantum executors use this to avoid an unrecoverable gap between Runner completion and Event persistence. |
+| `runtime` | property | <code>runtime?: ReActAgentRuntime</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `skillContextLoader` | property | <code>skillContextLoader?: SkillContextLoader</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `skillPolicy` | property | <code>skillPolicy?: SkillPolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `skillRegistry` | property | <code>skillRegistry?: SkillRegistry</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `skillSelector` | property | <code>skillSelector?: SkillSelector</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `syncMemory` | method | <code>syncMemory?(context: ReActRunContext, observation: ReActObservation): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `thinkingPlanner` | property | <code>thinkingPlanner?: ThinkingPlanner</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolRunner` | property | <code>toolRunner?: ToolRunner</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `verifier` | property | <code>verifier?: Verifier</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActAgentRuntime`
+
+ReAct Agent Runtime interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActAgentRuntime } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActAgentRuntime {
+    reason(context: ReActRunContext): Promise<InferenceRequest>;
+    selectAction(response: InferenceResponse): Promise<ReActAction>;
+    verify(context: ReActRunContext, observation: ReActObservation): Promise<ReActAction>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `reason` | method | <code>reason(context: ReActRunContext): Promise&lt;InferenceRequest&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `selectAction` | method | <code>selectAction(response: InferenceResponse): Promise&lt;ReActAction&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `verify` | method | <code>verify(context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ReActAgentSpec`
+
+ReAct Agent Spec interface with 17 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActAgentSpec } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActAgentSpec extends VersionedSpec, SpecMetadata {
+    name: string;
+    modelAlias: string;
+    systemInstructions?: string;
+    promptRefs?: AgentPromptRef[];
+    skillRefs?: SkillRef[];
+    toolRefs?: string[];
+    memoryProfileRef?: string;
+    policyRefs?: string[];
+    contextSpecRef?: SpecRef;
+    reasoning?: ReasoningConfig;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `contextSpecRef` | property | <code>contextSpecRef?: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `description` | property | <code>description?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryProfileRef` | property | <code>memoryProfileRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelAlias` | property | <code>modelAlias: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `name` | property | <code>name: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `owner` | property | <code>owner?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `policyRefs` | property | <code>policyRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `promptRefs` | property | <code>promptRefs?: AgentPromptRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoning` | property | <code>reasoning?: ReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `skillRefs` | property | <code>skillRefs?: SkillRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `systemInstructions` | property | <code>systemInstructions?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolRefs` | property | <code>toolRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActContinuationCheckpoint`
+
+ReAct Continuation Checkpoint interface with 19 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActContinuationCheckpoint } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActContinuationCheckpoint {
+    version: '1.0.0';
+    runId: string;
+    stepId: string;
+    scopeHash: string;
+    agentRef: SpecRef;
+    nextPhase: 'reason' | 'act';
+    messages: ModelMessage[];
+    iterations: number;
+    modelCalls: number;
+    toolCalls: number;
+    totalTokens: number;
+    toolInvocationSequence: number;
+    stepSequence: number;
+    consecutiveNoProgress: number;
+    lastProgressFingerprint?: string;
+    pendingAction?: ReActAction;
+    pendingToolInvocationId?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agentRef` | property | <code>agentRef: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `consecutiveNoProgress` | property | <code>consecutiveNoProgress: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `iterations` | property | <code>iterations: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `lastProgressFingerprint` | property | <code>lastProgressFingerprint?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messages` | property | <code>messages: ModelMessage[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `modelCalls` | property | <code>modelCalls: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `nextPhase` | property | <code>nextPhase: "reason" &#124; "act"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pendingAction` | property | <code>pendingAction?: ReActAction</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pendingToolInvocationId` | property | <code>pendingToolInvocationId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scopeHash` | property | <code>scopeHash: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepSequence` | property | <code>stepSequence: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolCalls` | property | <code>toolCalls: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolInvocationSequence` | property | <code>toolInvocationSequence: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `totalTokens` | property | <code>totalTokens: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAt` | property | <code>updatedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `version` | property | <code>version: "1.0.0"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActContinuationCheckpointPutResult`
+
+ReAct Continuation Checkpoint Put Result interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActContinuationCheckpointPutResult } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActContinuationCheckpointPutResult {
+    checkpoint: ReActContinuationCheckpoint;
+    reused: boolean;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `checkpoint` | property | <code>checkpoint: ReActContinuationCheckpoint</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reused` | property | <code>reused: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActContinuationCheckpointStore`
+
+ReAct Continuation Checkpoint Store interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActContinuationCheckpointStore } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActContinuationCheckpointStore {
+    put(checkpoint: ReActContinuationCheckpoint, idempotencyKey: string): Promise<ReActContinuationCheckpointPutResult>;
+    get(runId: string, stepId: string, expectedScopeHash: string): Promise<ReActContinuationCheckpoint | null>;
+    delete(runId: string, stepId: string, expectedScopeHash: string, expectedStepSequence?: number): Promise<boolean>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `delete` | method | <code>delete(runId: string, stepId: string, expectedScopeHash: string, expectedStepSequence?: number): Promise&lt;boolean&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get(runId: string, stepId: string, expectedScopeHash: string): Promise&lt;ReActContinuationCheckpoint &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `put` | method | <code>put(checkpoint: ReActContinuationCheckpoint, idempotencyKey: string): Promise&lt;ReActContinuationCheckpointPutResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ReActExecutionBudget`
 
 Global limits survive process restarts through ReActContinuationCheckpoint. quantumIterations only bounds one worker turn; it is not a new total budget.
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `deadlineAt` | property | <code>deadlineAt: string</code> | Public deadline At property. |
-| `maxConsecutiveNoProgress` | property | <code>maxConsecutiveNoProgress: number</code> | Public max Consecutive No Progress property. |
-| `maxIterations` | property | <code>maxIterations: number</code> | Public max Iterations property. |
-| `maxModelCalls` | property | <code>maxModelCalls: number</code> | Public max Model Calls property. |
-| `maxToolCalls` | property | <code>maxToolCalls: number</code> | Public max Tool Calls property. |
-| `maxTotalTokens` | property | <code>maxTotalTokens: number</code> | Public max Total Tokens property. |
-| `quantumIterations` | property | <code>quantumIterations: number</code> | Public quantum Iterations property. |
+- Kind: interface
+- Import: `import type { ReActExecutionBudget } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-## `ReActObservation` contract members
+### Declaration
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `provenance` | property | <code>provenance: Record&lt;string, unknown&gt;</code> | Public provenance property. |
-| `source` | property | <code>source: "memory" &#124; "system" &#124; "human" &#124; "tool" &#124; "model"</code> | Public source property. |
-| `value` | property | <code>value: TValue</code> | Public value property. |
+```text
+export interface ReActExecutionBudget {
+    maxIterations: number;
+    maxModelCalls: number;
+    maxToolCalls: number;
+    maxTotalTokens?: number;
+    maxConsecutiveNoProgress: number;
+    quantumIterations: number;
+    deadlineAt?: string;
+}
+```
 
-## `ReActRunContext` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `activeSkills` | property | <code>activeSkills: LoadedSkillContext[]</code> | Public active Skills property. |
-| `agent` | property | <code>agent: ReActAgentSpec</code> | Public agent property. |
-| `contextSpec` | property | <code>contextSpec: ContextSpec</code> | Public context Spec property. |
-| `memoryScope` | property | <code>memoryScope: MemoryScope</code> | Public memory Scope property. |
-| `messages` | property | <code>messages: ModelMessage[]</code> | Public messages property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `reasoningConfig` | property | <code>reasoningConfig: ReasoningConfig</code> | Public reasoning Config property. |
-| `reasoningDecision` | property | <code>reasoningDecision: AgenticReasoningDecision</code> | Public reasoning Decision property. |
-| `rejectedSkills` | property | <code>rejectedSkills: { skillId: string; reason: string; }[]</code> | Public rejected Skills property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `stepId` | property | <code>stepId: string</code> | Public step Id property. |
-| `thinkingPlan` | property | <code>thinkingPlan: ThinkingPlan</code> | Public thinking Plan property. |
-| `toolExecutionScope` | property | <code>toolExecutionScope: ToolExecutionScope</code> | Public tool Execution Scope property. |
-| `toolPrincipal` | property | <code>toolPrincipal: ToolPrincipal</code> | Public tool Principal property. |
-
-## `ReActRunControl` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `abortSignal` | property | <code>abortSignal: AbortSignal</code> | Public abort Signal property. |
-| `checkpoint` | property | <code>checkpoint: ReActContinuationCheckpoint</code> | Public checkpoint property. |
-| `executionBudget` | property | <code>executionBudget: Partial&lt;ReActExecutionBudget&gt;</code> | Public execution Budget property. |
-| `resumeFromCheckpointStore` | property | <code>resumeFromCheckpointStore: boolean</code> | Public resume From Checkpoint Store property. |
+| `deadlineAt` | property | <code>deadlineAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxConsecutiveNoProgress` | property | <code>maxConsecutiveNoProgress: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxIterations` | property | <code>maxIterations: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxModelCalls` | property | <code>maxModelCalls: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxToolCalls` | property | <code>maxToolCalls: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxTotalTokens` | property | <code>maxTotalTokens?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `quantumIterations` | property | <code>quantumIterations: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReActRunnerOptions` contract members
+## `ReActObservation`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `checkpointStore` | property | <code>checkpointStore: ReActContinuationCheckpointStore</code> | Public checkpoint Store property. |
-| `continueAfterTool` | property | <code>continueAfterTool: boolean</code> | Public continue After Tool property. |
-| `executionBudget` | property | <code>executionBudget: Partial&lt;ReActExecutionBudget&gt;</code> | Public execution Budget property. |
-| `inference` | property | <code>inference: InferenceProvider</code> | Public inference property. |
-| `maxIterations` | property | <code>maxIterations: number</code> | Public max Iterations property. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `onCheckpoint` | method | <code>onCheckpoint(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Handles Checkpoint at this module boundary. |
-| `onResume` | method | <code>onResume(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Handles Resume at this module boundary. |
-| `onStep` | method | <code>onStep(step: ReActStep): Promise&lt;void&gt; &#124; void</code> | Handles Step at this module boundary. |
-| `resolveToolExecutionScope` | method | <code>resolveToolExecutionScope(context: ReActRunContext, action: ReActAction): ToolExecutionScope &#124; undefined</code> | Resolves Tool Execution Scope at this module boundary. |
-| `retainCheckpointUntilOutcome` | property | <code>retainCheckpointUntilOutcome: boolean</code> | Keep the latest durable checkpoint until an outer transaction records the terminal/waiting outcome. Production quantum executors use this to avoid an unrecoverable gap between Runner completion and Event persistence. |
-| `syncMemory` | method | <code>syncMemory(context: ReActRunContext, observation: ReActObservation): Promise&lt;void&gt;</code> | Public runtime operation for sync Memory. |
-| `toolRunner` | property | <code>toolRunner: ToolRunner</code> | Public tool Runner property. |
+ReAct Observation interface with 3 public fields or methods.
 
-## `ReActRunResult` contract members
+- Kind: interface
+- Import: `import type { ReActObservation } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `checkpoint` | property | <code>checkpoint: ReActContinuationCheckpoint</code> | Public checkpoint property. |
-| `error` | property | <code>error: unknown</code> | Public error property. |
-| `finalAction` | property | <code>finalAction: ReActAction</code> | Public final Action property. |
-| `output` | property | <code>output: unknown</code> | Public output property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `status` | property | <code>status: "completed" &#124; "cancelled" &#124; "failed" &#124; "suspended" &#124; "human_review_required"</code> | Public status property. |
-| `steps` | property | <code>steps: ReActStep[]</code> | Public steps property. |
-| `suspension` | property | <code>suspension: ReActSuspension</code> | Public suspension property. |
+### Declaration
 
-## `ReActStep` contract members
+```text
+export interface ReActObservation<TValue = unknown> {
+    source: 'model' | 'tool' | 'memory' | 'human' | 'system';
+    value: TValue;
+    provenance?: Record<string, unknown>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `input` | property | <code>input: unknown</code> | Public input property. |
-| `output` | property | <code>output: unknown</code> | Public output property. |
-| `phase` | property | <code>phase: ReActPhase</code> | Public phase property. |
-| `traceEventId` | property | <code>traceEventId: string</code> | Public trace Event Id property. |
+| `provenance` | property | <code>provenance?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `source` | property | <code>source: "memory" &#124; "system" &#124; "human" &#124; "tool" &#124; "model"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `value` | property | <code>value: TValue</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ReActSuspension` contract members
+## `ReActRunContext`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `message` | property | <code>message: string</code> | Public message property. |
-| `reason` | property | <code>reason: "quantum_exhausted" &#124; "iteration_budget_exhausted" &#124; "model_call_budget_exhausted" &#124; "tool_call_budget_exhausted" &#124; "token_budget_exhausted" &#124; "non_progress" &#124; "deadline_exceeded"</code> | Public reason property. |
-| `requiresHumanReview` | property | <code>requiresHumanReview: boolean</code> | Public requires Human Review property. |
-| `retryable` | property | <code>retryable: boolean</code> | Public retryable property. |
+ReAct Run Context interface with 14 public fields or methods.
 
-## `ReasoningConfig` contract members
+- Kind: interface
+- Import: `import type { ReActRunContext } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agenticMode` | property | <code>agenticMode: AgenticReasoningMode</code> | Public agentic Mode property. |
-| `maxSteps` | property | <code>maxSteps: number</code> | Public max Steps property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `persist` | property | <code>persist: ReasoningPersistence</code> | Public persist property. |
-| `plannerRef` | property | <code>plannerRef: string</code> | Public planner Ref property. |
-| `reasonerRef` | property | <code>reasonerRef: string</code> | Public reasoner Ref property. |
-| `thinkingMode` | property | <code>thinkingMode: ThinkingMode</code> | Public thinking Mode property. |
+### Declaration
 
-## `ReasoningContextBuilderOptions` contract members
+```text
+export interface ReActRunContext {
+    runId: string;
+    stepId: string;
+    agent: ReActAgentSpec;
+    messages: ModelMessage[];
+    memoryScope?: MemoryScope;
+    contextSpec?: ContextSpec;
+    metadata?: Record<string, unknown>;
+    reasoningConfig?: ReasoningConfig;
+    thinkingPlan?: ThinkingPlan;
+    reasoningDecision?: AgenticReasoningDecision;
+    activeSkills?: LoadedSkillContext[];
+    rejectedSkills?: Array<{
+        skillId: string;
+        reason: string;
+    }>;
+    toolExecutionScope?: ToolExecutionScope;
+    toolPrincipal?: ToolPrincipal;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `baseBuilder` | property | <code>baseBuilder: ContextBuilder</code> | Public base Builder property. |
-| `config` | property | <code>config: ReasoningConfig</code> | Public config property. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `planner` | property | <code>planner: ThinkingPlanner</code> | Public planner property. |
-| `reasoner` | property | <code>reasoner: AgenticReasoner</code> | Public reasoner property. |
-
-## `RequiredReasoningConfig` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `agenticMode` | property | <code>agenticMode: AgenticReasoningMode</code> | Public agentic Mode property. |
-| `maxSteps` | property | <code>maxSteps: number</code> | Public max Steps property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `persist` | property | <code>persist: ReasoningPersistence</code> | Public persist property. |
-| `plannerRef` | property | <code>plannerRef: string</code> | Public planner Ref property. |
-| `reasonerRef` | property | <code>reasonerRef: string</code> | Public reasoner Ref property. |
-| `thinkingMode` | property | <code>thinkingMode: ThinkingMode</code> | Public thinking Mode property. |
-
-## `SkillContextBuilderOptions` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `allowedSkills` | property | <code>allowedSkills: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public allowed Skills property. |
-| `availableToolRefs` | property | <code>availableToolRefs: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; Promise&lt;string[]&gt;)</code> | Public available Tool Refs property. |
-| `baseBuilder` | property | <code>baseBuilder: ContextBuilder</code> | Public base Builder property. |
-| `contextLoader` | property | <code>contextLoader: SkillContextLoader</code> | Public context Loader property. |
-| `now` | method | <code>now(): string</code> | Public runtime operation for now. |
-| `policy` | property | <code>policy: SkillPolicy</code> | Public policy property. |
-| `registry` | property | <code>registry: SkillRegistry</code> | Public registry property. |
-| `requiredSkills` | property | <code>requiredSkills: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public required Skills property. |
-| `selector` | property | <code>selector: SkillSelector</code> | Public selector property. |
+| `activeSkills` | property | <code>activeSkills?: LoadedSkillContext[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `agent` | property | <code>agent: ReActAgentSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextSpec` | property | <code>contextSpec?: ContextSpec</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryScope` | property | <code>memoryScope?: MemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `messages` | property | <code>messages: ModelMessage[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoningConfig` | property | <code>reasoningConfig?: ReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoningDecision` | property | <code>reasoningDecision?: AgenticReasoningDecision</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rejectedSkills` | property | <code>rejectedSkills?: { skillId: string; reason: string; }[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stepId` | property | <code>stepId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `thinkingPlan` | property | <code>thinkingPlan?: ThinkingPlan</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolExecutionScope` | property | <code>toolExecutionScope?: ToolExecutionScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolPrincipal` | property | <code>toolPrincipal?: ToolPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ThinkingPlan` contract members
+## `ReActRunControl`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `constraints` | property | <code>constraints: string[]</code> | Public constraints property. |
-| `createdAt` | property | <code>createdAt: string</code> | Public created At property. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `intent` | property | <code>intent: string</code> | Public intent property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `mode` | property | <code>mode: "structured" &#124; "summary"</code> | Public mode property. |
-| `plan` | property | <code>plan: string[]</code> | Public plan property. |
-| `risks` | property | <code>risks: string[]</code> | Public risks property. |
-| `successCriteria` | property | <code>successCriteria: string[]</code> | Public success Criteria property. |
-| `summary` | property | <code>summary: string</code> | Public summary property. |
+ReAct Run Control interface with 4 public fields or methods.
 
-## `ThinkingPlanner` contract members
+- Kind: interface
+- Import: `import type { ReActRunControl } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `plan` | method | <code>plan(input: ThinkingPlannerInput): Promise&lt;ThinkingPlan&gt;</code> | Plans plan at this module boundary. |
+### Declaration
 
-## `ThinkingPlannerInput` contract members
+```text
+export interface ReActRunControl {
+    checkpoint?: ReActContinuationCheckpoint;
+    executionBudget?: Partial<ReActExecutionBudget>;
+    abortSignal?: AbortSignal;
+    resumeFromCheckpointStore?: boolean;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `config` | property | <code>config: RequiredReasoningConfig</code> | Public config property. |
-| `context` | property | <code>context: BuiltAgentContext</code> | Public context property. |
-
-## `ToolActivityPort` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `cancel` | method | <code>cancel(invocationId: string, reason?: string): Promise&lt;ToolActivityResult &#124; null&gt;</code> | Cancels cancel at this module boundary. |
-| `execute` | method | <code>execute(request: ToolActivityRequest): Promise&lt;ToolActivityResult&gt;</code> | Public runtime operation for execute. |
+| `abortSignal` | property | <code>abortSignal?: AbortSignal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `checkpoint` | property | <code>checkpoint?: ReActContinuationCheckpoint</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `executionBudget` | property | <code>executionBudget?: Partial&lt;ReActExecutionBudget&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `resumeFromCheckpointStore` | property | <code>resumeFromCheckpointStore?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ToolActivityRequest` contract members
+## `ReActRunnerOptions`
+
+ReAct Runner Options interface with 13 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActRunnerOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActRunnerOptions {
+    inference: InferenceProvider;
+    toolRunner?: ToolRunner;
+    maxIterations?: number;
+    executionBudget?: Partial<ReActExecutionBudget>;
+    checkpointStore?: ReActContinuationCheckpointStore;
+    continueAfterTool?: boolean;
+    onStep?: (step: ReActStep) => Promise<void> | void;
+    onCheckpoint?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
+    onResume?: (checkpoint: ReActContinuationCheckpoint) => Promise<void> | void;
+    syncMemory?: (context: ReActRunContext, observation: ReActObservation) => Promise<void>;
+    /**
+     * Keep the latest durable checkpoint until an outer transaction records the
+     * terminal/waiting outcome. Production quantum executors use this to avoid
+     * an unrecoverable gap between Runner completion and Event persistence.
+     */
+    retainCheckpointUntilOutcome?: boolean;
+    resolveToolExecutionScope?: (context: ReActRunContext, action: ReActAction) => ToolExecutionScope | undefined;
+    now?: () => string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `contractSnapshotRef` | property | <code>contractSnapshotRef: string</code> | Public contract Snapshot Ref property. |
-| `deadlineAt` | property | <code>deadlineAt: string</code> | Public deadline At property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `input` | property | <code>input: unknown</code> | Public input property. |
-| `invocationId` | property | <code>invocationId: string</code> | Public invocation Id property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `principal` | property | <code>principal: ToolPrincipal</code> | Public principal property. |
-| `runId` | property | <code>runId: string</code> | Public run Id property. |
-| `stateAttemptId` | property | <code>stateAttemptId: string</code> | Public state Attempt Id property. |
-| `toolRef` | property | <code>toolRef: SpecRef</code> | Public tool Ref property. |
+| `checkpointStore` | property | <code>checkpointStore?: ReActContinuationCheckpointStore</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `continueAfterTool` | property | <code>continueAfterTool?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `executionBudget` | property | <code>executionBudget?: Partial&lt;ReActExecutionBudget&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `inference` | property | <code>inference: InferenceProvider</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxIterations` | property | <code>maxIterations?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `onCheckpoint` | method | <code>onCheckpoint?(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Public method; parameters and return type are shown in the signature. |
+| `onResume` | method | <code>onResume?(checkpoint: ReActContinuationCheckpoint): Promise&lt;void&gt; &#124; void</code> | Public method; parameters and return type are shown in the signature. |
+| `onStep` | method | <code>onStep?(step: ReActStep): Promise&lt;void&gt; &#124; void</code> | Public method; parameters and return type are shown in the signature. |
+| `resolveToolExecutionScope` | method | <code>resolveToolExecutionScope?(context: ReActRunContext, action: ReActAction): ToolExecutionScope &#124; undefined</code> | Public method; parameters and return type are shown in the signature. |
+| `retainCheckpointUntilOutcome` | property | <code>retainCheckpointUntilOutcome?: boolean</code> | Keep the latest durable checkpoint until an outer transaction records the terminal/waiting outcome. Production quantum executors use this to avoid an unrecoverable gap between Runner completion and Event persistence. |
+| `syncMemory` | method | <code>syncMemory?(context: ReActRunContext, observation: ReActObservation): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `toolRunner` | property | <code>toolRunner?: ToolRunner</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ToolActivityResult` contract members
+## `ReActRunResult`
+
+ReAct Run Result interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActRunResult } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActRunResult {
+    runId: string;
+    status: 'completed' | 'failed' | 'human_review_required' | 'suspended' | 'cancelled';
+    steps: ReActStep[];
+    output?: unknown;
+    finalAction?: ReActAction;
+    checkpoint?: ReActContinuationCheckpoint;
+    suspension?: ReActSuspension;
+    error?: unknown;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `approvalRequestRef` | property | <code>approvalRequestRef: string</code> | Public approval Request Ref property. |
-| `artifactRefs` | property | <code>artifactRefs: string[]</code> | Public artifact Refs property. |
-| `error` | property | <code>error: NormalizedToolError</code> | Public error property. |
-| `eventIds` | property | <code>eventIds: string[]</code> | Public event Ids property. |
-| `invocationId` | property | <code>invocationId: string</code> | Public invocation Id property. |
-| `output` | property | <code>output: unknown</code> | Public output property. |
-| `status` | property | <code>status: "completed" &#124; "cancelled" &#124; "failed" &#124; "denied" &#124; "conflict" &#124; "waiting_approval"</code> | Public status property. |
+| `checkpoint` | property | <code>checkpoint?: ReActContinuationCheckpoint</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `error` | property | <code>error?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `finalAction` | property | <code>finalAction?: ReActAction</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `output` | property | <code>output?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status: "completed" &#124; "cancelled" &#124; "failed" &#124; "suspended" &#124; "human_review_required"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `steps` | property | <code>steps: ReActStep[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `suspension` | property | <code>suspension?: ReActSuspension</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `Verifier` contract members
+## `ReActStep`
+
+ReAct Step interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActStep } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActStep {
+    id: string;
+    phase: ReActPhase;
+    input?: unknown;
+    output?: unknown;
+    traceEventId?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `verify` | method | <code>verify(context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public runtime operation for verify. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `output` | property | <code>output?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `phase` | property | <code>phase: ReActPhase</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `traceEventId` | property | <code>traceEventId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReActSuspension`
+
+ReAct Suspension interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReActSuspension } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReActSuspension {
+    reason: ReActSuspensionReason;
+    retryable: boolean;
+    requiresHumanReview: boolean;
+    message: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `message` | property | <code>message: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: "quantum_exhausted" &#124; "iteration_budget_exhausted" &#124; "model_call_budget_exhausted" &#124; "tool_call_budget_exhausted" &#124; "token_budget_exhausted" &#124; "non_progress" &#124; "deadline_exceeded"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requiresHumanReview` | property | <code>requiresHumanReview: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `retryable` | property | <code>retryable: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReasoningConfig`
+
+Reasoning Config interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReasoningConfig } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReasoningConfig {
+    thinkingMode?: ThinkingMode;
+    agenticMode?: AgenticReasoningMode;
+    maxSteps?: number;
+    persist?: ReasoningPersistence;
+    plannerRef?: string;
+    reasonerRef?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agenticMode` | property | <code>agenticMode?: AgenticReasoningMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxSteps` | property | <code>maxSteps?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `persist` | property | <code>persist?: ReasoningPersistence</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `plannerRef` | property | <code>plannerRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasonerRef` | property | <code>reasonerRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `thinkingMode` | property | <code>thinkingMode?: ThinkingMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ReasoningContextBuilderOptions`
+
+Reasoning Context Builder Options interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ReasoningContextBuilderOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ReasoningContextBuilderOptions {
+    baseBuilder?: ContextBuilder;
+    planner?: ThinkingPlanner;
+    reasoner?: AgenticReasoner;
+    config?: ReasoningConfig;
+    now?: () => string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `baseBuilder` | property | <code>baseBuilder?: ContextBuilder</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `config` | property | <code>config?: ReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `planner` | property | <code>planner?: ThinkingPlanner</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasoner` | property | <code>reasoner?: AgenticReasoner</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `RequiredReasoningConfig`
+
+Required Reasoning Config interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { RequiredReasoningConfig } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface RequiredReasoningConfig extends Required<Omit<ReasoningConfig, 'plannerRef' | 'reasonerRef' | 'metadata'>> {
+    plannerRef?: string;
+    reasonerRef?: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `agenticMode` | property | <code>agenticMode?: AgenticReasoningMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxSteps` | property | <code>maxSteps?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `persist` | property | <code>persist?: ReasoningPersistence</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `plannerRef` | property | <code>plannerRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasonerRef` | property | <code>reasonerRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `thinkingMode` | property | <code>thinkingMode?: ThinkingMode</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `SkillContextBuilderOptions`
+
+Skill Context Builder Options interface with 9 public fields or methods.
+
+- Kind: interface
+- Import: `import type { SkillContextBuilderOptions } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface SkillContextBuilderOptions {
+    registry: SkillRegistry;
+    baseBuilder?: ContextBuilder;
+    selector?: SkillSelector;
+    contextLoader?: SkillContextLoader;
+    policy?: SkillPolicy;
+    allowedSkills?: string[] | ((input: ContextBuildInput, base: BuiltAgentContext) => string[] | undefined | Promise<string[] | undefined>);
+    requiredSkills?: string[] | ((input: ContextBuildInput, base: BuiltAgentContext) => string[] | undefined | Promise<string[] | undefined>);
+    availableToolRefs?: string[] | ((input: ContextBuildInput, base: BuiltAgentContext) => string[] | Promise<string[]>);
+    now?: () => string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `allowedSkills` | property | <code>allowedSkills?: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `availableToolRefs` | property | <code>availableToolRefs?: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; Promise&lt;string[]&gt;)</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `baseBuilder` | property | <code>baseBuilder?: ContextBuilder</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `contextLoader` | property | <code>contextLoader?: SkillContextLoader</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `now` | method | <code>now?(): string</code> | Public method; parameters and return type are shown in the signature. |
+| `policy` | property | <code>policy?: SkillPolicy</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `registry` | property | <code>registry: SkillRegistry</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `requiredSkills` | property | <code>requiredSkills?: string[] &#124; ((input: ContextBuildInput, base: BuiltAgentContext) =&gt; string[] &#124; undefined &#124; Promise&lt;string[] &#124; undefined&gt;)</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `selector` | property | <code>selector?: SkillSelector</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ThinkingPlan`
+
+Thinking Plan interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ThinkingPlan } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ThinkingPlan {
+    id: string;
+    mode: Exclude<ThinkingMode, 'none'>;
+    intent: string;
+    constraints: string[];
+    successCriteria: string[];
+    plan: string[];
+    risks: string[];
+    summary: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `constraints` | property | <code>constraints: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAt` | property | <code>createdAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `intent` | property | <code>intent: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: "structured" &#124; "summary"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `plan` | property | <code>plan: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `risks` | property | <code>risks: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `successCriteria` | property | <code>successCriteria: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `summary` | property | <code>summary: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ThinkingPlanner`
+
+Thinking Planner interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ThinkingPlanner } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ThinkingPlanner {
+    plan(input: ThinkingPlannerInput): Promise<ThinkingPlan>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `plan` | method | <code>plan(input: ThinkingPlannerInput): Promise&lt;ThinkingPlan&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ThinkingPlannerInput`
+
+Thinking Planner Input interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ThinkingPlannerInput } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ThinkingPlannerInput {
+    context: BuiltAgentContext;
+    config: RequiredReasoningConfig;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `config` | property | <code>config: RequiredReasoningConfig</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `context` | property | <code>context: BuiltAgentContext</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ToolActivityPort`
+
+Tool Activity Port interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ToolActivityPort } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ToolActivityPort {
+    execute(request: ToolActivityRequest): Promise<ToolActivityResult>;
+    cancel(invocationId: string, reason?: string): Promise<ToolActivityResult | null>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cancel` | method | <code>cancel(invocationId: string, reason?: string): Promise&lt;ToolActivityResult &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `execute` | method | <code>execute(request: ToolActivityRequest): Promise&lt;ToolActivityResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `ToolActivityRequest`
+
+Tool Activity Request interface with 10 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ToolActivityRequest } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ToolActivityRequest {
+    operationId: string;
+    invocationId: string;
+    runId: string;
+    stateAttemptId: string;
+    toolRef: SpecRef;
+    input: unknown;
+    principal: ToolPrincipal;
+    deadlineAt?: string;
+    idempotencyKey?: string;
+    contractSnapshotRef?: string;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `contractSnapshotRef` | property | <code>contractSnapshotRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `deadlineAt` | property | <code>deadlineAt?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `invocationId` | property | <code>invocationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: ToolPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `runId` | property | <code>runId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `stateAttemptId` | property | <code>stateAttemptId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `toolRef` | property | <code>toolRef: SpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ToolActivityResult`
+
+Tool Activity Result interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ToolActivityResult } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface ToolActivityResult {
+    invocationId: string;
+    status: 'completed' | 'failed' | 'denied' | 'waiting_approval' | 'cancelled' | 'conflict';
+    output?: unknown;
+    artifactRefs?: string[];
+    approvalRequestRef?: string;
+    eventIds: string[];
+    error?: NormalizedToolError;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `approvalRequestRef` | property | <code>approvalRequestRef?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `artifactRefs` | property | <code>artifactRefs?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `error` | property | <code>error?: NormalizedToolError</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `eventIds` | property | <code>eventIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `invocationId` | property | <code>invocationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `output` | property | <code>output?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status: "completed" &#124; "cancelled" &#124; "failed" &#124; "denied" &#124; "conflict" &#124; "waiting_approval"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `Verifier`
+
+Verifier interface with 1 public fields or methods.
+
+- Kind: interface
+- Import: `import type { Verifier } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export interface Verifier {
+    verify(context: ReActRunContext, observation: ReActObservation): Promise<ReActAction>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `verify` | method | <code>verify(context: ReActRunContext, observation: ReActObservation): Promise&lt;ReActAction&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `AgenticReasoningMode`
+
+Public type alias for Agentic Reasoning Mode; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { AgenticReasoningMode } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export type AgenticReasoningMode = 'react' | 'fsm_react' | 'tot' | 'critique';
+```
+
+## `ReActPhase`
+
+Public type alias for ReAct Phase; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { ReActPhase } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export type ReActPhase = 'observe' | 'reason' | 'select_action' | 'policy_check' | 'act' | 'observe_result' | 'verify' | 'memory_sync' | 'complete' | 'fail' | 'human_review' | 'suspend' | 'cancel';
+```
+
+## `ReActSuspensionReason`
+
+Public type alias for ReAct Suspension Reason; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { ReActSuspensionReason } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export type ReActSuspensionReason = (typeof REACT_SUSPENSION_REASONS)[number];
+```
+
+## `ReasoningPersistence`
+
+Public type alias for Reasoning Persistence; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { ReasoningPersistence } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export type ReasoningPersistence = 'summary_only' | 'events_only';
+```
+
+## `ThinkingMode`
+
+Public type alias for Thinking Mode; the declaration contains its complete type expression.
+
+- Kind: type
+- Import: `import type { ThinkingMode } from '@codesoul-co/hypha-kernel';`
+- Source module: [`index`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/kernel/src/index.ts)
+
+### Declaration
+
+```text
+export type ThinkingMode = 'none' | 'summary' | 'structured';
+```

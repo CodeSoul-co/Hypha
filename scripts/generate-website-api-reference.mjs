@@ -129,27 +129,21 @@ function renderIndex(language) {
     `# ${zh ? '完整 API 参考' : 'Complete API reference'}`,
     '',
     zh
-      ? '这里列出当前 Hypha 公共入口的全部导出，并按 npm 包与源码模块拆分。模块指南负责解释设计意图和组合方式；本区负责回答“具体有哪些类、函数、类型和常量，它们从哪里导出”。'
-      : 'This section enumerates every export from the current Hypha public entrypoints, grouped by npm package and source module. Package guides explain design intent and composition; these pages answer which classes, functions, interfaces, types and constants exist and where they come from.',
+      ? '这里记录当前 Hypha npm 包入口的全部公共导出，并按包与源码模块拆分。每个模块说明自身用途与入口导入方式；每个 Symbol 条目包含 TypeScript 声明、源码位置、函数参数与返回类型，或类、接口和枚举的公开成员。'
+      : 'This reference documents every public export from the current Hypha npm package entrypoints, grouped by package and source module. Each module explains its purpose and entrypoint imports; each symbol entry includes its TypeScript declaration, source location, function parameters and return type, or the public members of its class, interface, or enum.',
     '',
-    `> ${zh ? '生成方式' : 'Generated reference'}: \`npm run docs:api\`. ${zh ? '签名由构建后的 TypeScript 声明生成，超长推导类型会压缩显示并链接源码；修改公共导出后应重新生成并提交这些页面。' : 'Signatures are derived from built TypeScript declarations; very long inferred types are compacted and linked to source. Regenerate and commit these pages after changing public exports.'}`,
-    '',
-    `## ${zh ? '如何阅读' : 'How to use this reference'}`,
-    '',
-    zh
-      ? '1. 先从[逐功能指南](/zh/guide/capability-map)确定功能边界和执行顺序。\n2. 打开对应[模块指南](/zh/packages/)查看完整示例和运行时不变量。\n3. 在下表进入包级 API，按源码模块定位具体 Symbol、签名与类成员。'
-      : '1. Start with the [feature map](/guide/capability-map) to understand boundaries and execution order.\n2. Open the relevant [package guide](/packages/) for composition examples and runtime invariants.\n3. Use the package API pages below to locate exact symbols, signatures and class members by source module.',
+    `> ${zh ? '生成依据' : 'Source of record'}: ${zh ? '页面由构建后的 TypeScript 声明通过' : 'These pages are generated from built TypeScript declarations by'} \`npm run docs:api\`${zh ? '生成。函数、类、接口、类型与枚举保留完整声明；编译器展开后超过 4,000 字符的常量推导类型会压缩显示，并保留源码链接。' : '. Functions, classes, interfaces, types and enums retain complete declarations. Compiler-expanded constant types longer than 4,000 characters are compacted for readability and retain a source link.'}`,
     '',
     `## ${zh ? '包索引' : 'Package index'}`,
     '',
-    `| ${zh ? '包' : 'Package'} | ${zh ? '职责' : 'Responsibility'} | ${zh ? '学习指南' : 'Guide'} |`,
-    '| --- | --- | --- |',
+    `| ${zh ? '包' : 'Package'} | ${zh ? 'API 范围' : 'API scope'} |`,
+    '| --- | --- |',
     ...packages.map((name) => {
       const description = packageDescriptions[name][zh ? 1 : 0];
-      return `| [\`@codesoul-co/hypha-${name}\`](${prefix}/api/${name}) | ${description} | [${zh ? '模块指南' : 'Package guide'}](${prefix}/packages/${name}) |`;
+      return `| [\`@codesoul-co/hypha-${name}\`](${prefix}/api/${name}) | ${description} |`;
     }),
     '',
-    `## ${zh ? '稳定性说明' : 'Stability notes'}`,
+    `## ${zh ? '公共 API 边界' : 'Public API boundary'}`,
     '',
     zh
       ? '- 公共入口导出的 Symbol 才属于本索引；源码中的非导出实现不是公共 API。\n- TypeScript 类型会在运行时擦除；不可信输入仍应使用对应的 Zod/Spec Definition 解析。\n- Tool、MCP、Memory Write、File Write 与 External Write 必须经过 Policy、Trace 与 Harness Hook。\n- Event 是事实来源；Session 与 Run 是可重建的产品/上下文视图。'
@@ -191,9 +185,10 @@ function renderPackage(packageName, language) {
     '',
     packageDescriptions[packageName][zh ? 1 : 0],
     '',
-    `- ${zh ? '模块指南' : 'Package guide'}: [\`${packageLabel}\`](${prefix}/packages/${packageName})`,
     `- ${zh ? '安装' : 'Install'}: \`npm install ${packageLabel}@1.0.1\``,
+    `- ${zh ? '入口导入' : 'Entrypoint import'}: \`import { ... } from '${packageLabel}';\``,
     `- ${zh ? '公共导出' : 'Public exports'}: **${exports.length}**`,
+    `- ${zh ? '源码模块' : 'Source modules'}: **${modules.size}**`,
     '',
     `## ${zh ? '导出概览' : 'Export overview'}`,
     '',
@@ -203,26 +198,217 @@ function renderPackage(packageName, language) {
     '',
     `## ${zh ? '源码模块' : 'Source modules'}`,
     '',
-    `| ${zh ? '模块' : 'Module'} | ${zh ? '导出数' : 'Exports'} | ${zh ? '源码' : 'Source'} |`,
-    '| --- | ---: | --- |',
+    `| ${zh ? '模块' : 'Module'} | ${zh ? '用途' : 'Use when'} | ${zh ? '导出数' : 'Exports'} | ${zh ? '源码' : 'Source'} |`,
+    '| --- | --- | ---: | --- |',
     ...[...modules.entries()].map(([moduleName, items]) => {
-      return `| [\`${moduleName}\`](${prefix}/api/${packageName}/${modulePagePath(moduleName)}) | ${items.length} | [source](${sourceUrl(packageName, moduleName)}) |`;
+      return `| [\`${moduleName}\`](${prefix}/api/${packageName}/${modulePagePath(moduleName)}) | ${escapeTable(modulePurpose(packageName, moduleName, items, language))} | ${items.length} | [source](${sourceUrl(packageName, moduleName)}) |`;
     }),
     '',
-    `## ${zh ? '阅读顺序' : 'Reading order'}`,
+    `## ${zh ? '导入边界' : 'Import boundary'}`,
     '',
     zh
-      ? '先在上表选择源码模块，再查看该模块导出的 Symbol、签名、说明以及类/接口的公开成员。每个模块页都链接回实际源码。'
-      : 'Choose a source module above, then inspect its exported symbols, signatures, descriptions and public class/interface members. Every module page links back to the implementation source.',
-    '',
-    `## ${zh ? '使用约定' : 'Usage conventions'}`,
-    '',
-    zh
-      ? '- 从包入口导入，不依赖未导出的内部文件。\n- 对配置、网络请求和持久化数据使用 Runtime Schema 解析。\n- 类实例负责运行时行为；Spec/Interface 负责跨模块契约；不要把 Provider SDK 类型泄漏到 Core。\n- 结合[可运行示例](/zh/guide/examples)验证实际调用顺序。'
-      : '- Import from the package entrypoint instead of relying on unexported internal files.\n- Parse configuration, network requests and persisted data with runtime schemas.\n- Classes provide runtime behavior while specs/interfaces define cross-module contracts; do not leak provider SDK types into Core.\n- Use the [runnable examples](/guide/examples) to verify real call order.',
+      ? `本页只记录 \`${packageLabel}\` 包入口导出的公共 API。\`packages/${packageName}/src\` 中未由入口导出的实现不属于该 npm 包的公共契约。`
+      : `This page documents only the public API exported by the \`${packageLabel}\` package entrypoint. Implementations under \`packages/${packageName}/src\` that are not exported from that entrypoint are not part of the npm package contract.`,
     '',
   ];
   return lines.join('\n');
+}
+
+function modulePurpose(packageName, moduleName, items, language) {
+  const zh = language === 'zh';
+  if (moduleName === 'index') {
+    return zh
+      ? `聚合 \`@codesoul-co/hypha-${packageName}\` 的公共入口导出；应用应从包入口导入这些 Symbol，不应依赖内部文件路径。`
+      : `Aggregates the public entrypoint exports for \`@codesoul-co/hypha-${packageName}\`; applications import these symbols from the package entrypoint instead of internal file paths.`;
+  }
+
+  const subject = humanize(moduleName.split('/').at(-1));
+  const lowerName = moduleName.toLowerCase();
+  const categories = [
+    [
+      ['schema', 'spec', 'contract', 'types'],
+      '声明并运行时校验契约',
+      'declaring and runtime-validating contracts',
+    ],
+    [
+      ['port'],
+      '定义或实现 Provider-neutral Port',
+      'defining or implementing provider-neutral ports',
+    ],
+    [
+      ['workspace'],
+      '声明并实施 Workspace 作用域边界',
+      'declaring and enforcing workspace scope boundaries',
+    ],
+    [
+      ['secret'],
+      '传递受控 Secret 引用与解析契约',
+      'passing governed secret references and resolution contracts',
+    ],
+    [
+      ['media'],
+      '声明 Tool 的文本、图像、音频与二进制输入输出',
+      'declaring text, image, audio, and binary Tool inputs and outputs',
+    ],
+    [
+      ['family'],
+      '声明并解析 Tool Family 能力集合',
+      'declaring and resolving Tool Family capability sets',
+    ],
+    [['event'], '创建、记录或读取 Event 契约', 'creating, recording, or reading Event contracts'],
+    [
+      ['adapter', 'provider', 'client'],
+      '把外部或本地 Provider 绑定到 Hypha Port',
+      'binding external or local providers to Hypha ports',
+    ],
+    [
+      ['store', 'repository', 'persistence'],
+      '持久化并读取该边界的数据',
+      'persisting and reading data at this boundary',
+    ],
+    [
+      ['registry', 'catalog'],
+      '注册并解析版本化能力或实现',
+      'registering and resolving versioned capabilities or implementations',
+    ],
+    [
+      ['runtime', 'runner', 'executor', 'execution'],
+      '执行该边界的运行时行为',
+      'executing runtime behavior at this boundary',
+    ],
+    [['policy', 'governance'], '实施 Policy 与治理检查', 'applying policy and governance checks'],
+    [
+      ['recovery', 'retry', 'circuit'],
+      '处理有界恢复、重试或降级',
+      'handling bounded recovery, retry, or degradation',
+    ],
+    [['cache'], '读写或协调缓存状态', 'reading, writing, or coordinating cache state'],
+    [
+      ['test', 'fixture', 'assert'],
+      '编写确定性测试与契约断言',
+      'writing deterministic tests and contract assertions',
+    ],
+    [
+      ['error', 'failure'],
+      '规范化、分类或暴露错误契约',
+      'normalizing, classifying, or exposing error contracts',
+    ],
+  ];
+  const category = categories.find(([needles]) =>
+    needles.some((needle) => lowerName.includes(needle))
+  );
+  const activity =
+    category?.[zh ? 1 : 2] ??
+    (zh
+      ? '使用该功能边界的公共契约与操作'
+      : 'using the public contracts and operations for this capability boundary');
+  const shape = countKinds(items);
+  const shapeSummary = Object.entries(shape)
+    .map(([kind, count]) => kindCount(kind, count, language))
+    .join(zh ? '、' : ', ');
+  return zh
+    ? `用于${activity}。${subject} 模块公开 ${shapeSummary}。`
+    : `Use the ${subject} module for ${activity}. It exports ${shapeSummary}.`;
+}
+
+function moduleImportExample(packageLabel, items, language) {
+  const runtimeItems = items
+    .filter((item) => item.kind !== 'interface' && item.kind !== 'type')
+    .slice(0, 8);
+  const typeItems = items
+    .filter((item) => item.kind === 'interface' || item.kind === 'type')
+    .slice(0, 8);
+  const lines = [];
+  if (runtimeItems.length > 0) {
+    lines.push(
+      'import {',
+      ...runtimeItems.map((item) => `  ${item.name},`),
+      `} from '${packageLabel}';`
+    );
+  }
+  if (typeItems.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(
+      'import type {',
+      ...typeItems.map((item) => `  ${item.name},`),
+      `} from '${packageLabel}';`
+    );
+  }
+  if (runtimeItems.length + typeItems.length < items.length) {
+    lines.push(
+      '',
+      language === 'zh'
+        ? '// 完整导出列表见下方。'
+        : '// The complete export list is documented below.'
+    );
+  }
+  return lines.join('\n');
+}
+
+function moduleUsageNotes(packageName, items, language) {
+  const zh = language === 'zh';
+  const lines = [`### ${zh ? '使用要点' : 'Usage patterns'}`, ''];
+  const typeCount = items.filter(
+    (item) => item.kind === 'interface' || item.kind === 'type'
+  ).length;
+  const classCount = items.filter((item) => item.kind === 'class').length;
+  const functionCount = items.filter((item) => item.kind === 'function').length;
+  const valueCount = items.filter((item) => ['constant', 'enum'].includes(item.kind)).length;
+  const schema = items.find(
+    (item) =>
+      item.kind === 'constant' &&
+      item.name.endsWith('Schema') &&
+      !item.name.endsWith('JsonSchema') &&
+      item.signature.includes('z.')
+  );
+
+  if (typeCount > 0) {
+    lines.push(
+      zh
+        ? `- ${typeCount} 个类型/接口用于应用代码、Adapter 或测试中的静态契约；请使用 \`import type\`，运行时不应依赖它们。`
+        : `- Use the ${typeCount} type/interface ${typeCount === 1 ? 'export' : 'exports'} as static contracts in application code, adapters, or tests. Import them with \`import type\`; they do not exist at runtime.`
+    );
+  }
+  if (classCount > 0) {
+    lines.push(
+      zh
+        ? `- ${classCount} 个类提供可实例化的运行时实现；构造参数与公开方法在各自条目中完整列出。`
+        : `- The module exposes ${kindCount('class', classCount, language)} as constructable runtime implementations. Each symbol entry lists its constructor and public methods.`
+    );
+  }
+  if (functionCount > 0) {
+    lines.push(
+      zh
+        ? `- ${functionCount} 个函数是该模块的直接操作入口；每个 overload 的必需/可选参数与返回类型均在下方列出。`
+        : `- The module exposes ${kindCount('function', functionCount, language)} as direct operation entrypoints. Every overload, required/optional parameter, and return type is documented below.`
+    );
+  }
+  if (valueCount > 0) {
+    lines.push(
+      zh
+        ? `- ${valueCount} 个常量/枚举提供稳定值、Schema、Definition 或默认配置；应复用这些导出，避免在应用中复制内部值。`
+        : `- The ${valueCount} constant/enum ${valueCount === 1 ? 'export provides' : 'exports provide'} stable values, schemas, definitions, or defaults. Reuse these exports instead of copying internal values into an application.`
+    );
+  }
+  lines.push('');
+  if (schema) {
+    lines.push(
+      `### ${zh ? '运行时校验示例' : 'Runtime validation example'}`,
+      '',
+      '```ts',
+      `import { ${schema.name} } from '@codesoul-co/hypha-${packageName}';`,
+      '',
+      'declare function loadExternalInput(): unknown;',
+      'const input: unknown = loadExternalInput();',
+      `const parsed = ${schema.name}.parse(input);`,
+      '```',
+      '',
+      zh
+        ? '配置、网络请求或持久化数据等不可信输入应先通过 Runtime Schema，再传给只接受已校验契约的函数或类。'
+        : 'Parse untrusted configuration, network, or persisted input with the runtime schema before passing it to functions or classes that expect a validated contract.'
+    );
+  }
+  return lines;
 }
 
 function renderModulePage(packageName, moduleName, items, language) {
@@ -233,9 +419,20 @@ function renderModulePage(packageName, moduleName, items, language) {
     `# \`${packageLabel}\` / \`${moduleName}\``,
     '',
     `- ${zh ? '包索引' : 'Package index'}: [\`${packageLabel}\`](${prefix}/api/${packageName})`,
-    `- ${zh ? '模块指南' : 'Package guide'}: [${zh ? '学习与组合说明' : 'learning and composition guide'}](${prefix}/packages/${packageName})`,
     `- ${zh ? '源码' : 'Source'}: [\`packages/${packageName}/src/${sourcePath(moduleName)}\`](${sourceUrl(packageName, moduleName)})`,
     `- ${zh ? '导出数' : 'Exports'}: **${items.length}**`,
+    '',
+    `## ${zh ? '模块用法' : 'Using this module'}`,
+    '',
+    modulePurpose(packageName, moduleName, items, language),
+    '',
+    `### ${zh ? '从包入口导入' : 'Import from the package entrypoint'}`,
+    '',
+    '```ts',
+    moduleImportExample(packageLabel, items, language),
+    '```',
+    '',
+    ...moduleUsageNotes(packageName, items, language),
     '',
     `## ${zh ? '公共导出' : 'Public exports'}`,
     '',
@@ -249,16 +446,69 @@ function renderModulePage(packageName, moduleName, items, language) {
   }
   lines.push('');
 
-  const contracts = items.filter(
-    (item) => (item.kind === 'class' || item.kind === 'interface') && item.members.length > 0
-  );
-  for (const item of contracts) {
+  for (const item of items) {
+    lines.push(`## \`${item.name}\``, '');
+    lines.push(item.description || fallbackDescription(item, language), '');
     lines.push(
-      `## \`${item.name}\` ${zh ? (item.kind === 'class' ? '公开成员' : '契约字段') : item.kind === 'class' ? 'public members' : 'contract members'}`,
+      `- ${zh ? '种类' : 'Kind'}: ${kindLabel(item.kind, language)}`,
+      `- ${zh ? '导入' : 'Import'}: \`${importStatement(packageLabel, item)}\``,
+      `- ${zh ? '源码模块' : 'Source module'}: [\`${moduleName}\`](${sourceUrl(packageName, moduleName)})`,
+      '',
+      `### ${zh ? '声明' : 'Declaration'}`,
+      '',
+      '```text',
+      declarationForDisplay(item, language),
+      '```',
       ''
     );
-    if (item.description) lines.push(item.description, '');
+    if (isCompactedDeclaration(item)) {
+      lines.push(
+        zh
+          ? '> 该常量的编译器展开类型已压缩；它的公共名称、顶层类型与源码位置仍保留在本条目中。相关输入/输出字段请使用同模块导出的接口、类型或 Runtime Schema。'
+          : '> This compiler-expanded constant type is compacted. Its public name, top-level type, and source location remain here; use the module’s exported interfaces, types, or runtime schema for input/output fields.',
+        ''
+      );
+    }
+
+    for (const [index, callable] of item.callSignatures.entries()) {
+      const overload = item.callSignatures.length > 1 ? ` ${index + 1}` : '';
+      lines.push(
+        `### ${zh ? '调用签名' : 'Call signature'}${overload}`,
+        '',
+        '```text',
+        `${item.name}${callable.signature}`,
+        '```',
+        ''
+      );
+      if (callable.description) lines.push(callable.description, '');
+      lines.push(`#### ${zh ? '参数' : 'Parameters'}`, '');
+      if (callable.parameters.length === 0) {
+        lines.push(zh ? '无参数。' : 'No parameters.', '');
+      } else {
+        lines.push(
+          `| ${zh ? '参数' : 'Parameter'} | ${zh ? '类型' : 'Type'} | ${zh ? '必需' : 'Required'} | ${zh ? '说明' : 'Description'} |`,
+          '| --- | --- | --- | --- |'
+        );
+        for (const parameter of callable.parameters) {
+          lines.push(
+            `| \`${escapeCode(parameter.name)}\` | <code>${escapeHtml(parameter.type)}</code> | ${parameter.optional ? (zh ? '否' : 'No') : zh ? '是' : 'Yes'} | ${escapeTable(parameter.description || fallbackParameterDescription(parameter, language))} |`
+          );
+        }
+        lines.push('');
+      }
+      lines.push(
+        `#### ${zh ? '返回值' : 'Returns'}`,
+        '',
+        `- ${zh ? '类型' : 'Type'}: \`${escapeInlineCode(callable.returnType)}\``,
+        `- ${zh ? '说明' : 'Description'}: ${callable.returnDescription || fallbackReturnDescription(callable, language)}`,
+        ''
+      );
+    }
+
+    if (item.members.length === 0) continue;
     lines.push(
+      `### ${zh ? (item.kind === 'interface' ? '契约成员' : '公开成员') : item.kind === 'interface' ? 'Contract members' : 'Public members'}`,
+      '',
       `| ${zh ? '成员' : 'Member'} | ${zh ? '种类' : 'Kind'} | ${zh ? '签名' : 'Signature'} | ${zh ? '说明' : 'Description'} |`,
       '| --- | --- | --- | --- |'
     );
@@ -286,17 +536,58 @@ function describeExport(packageName, exported) {
   const kind = symbolKind(target, declaration);
   return {
     name: exported.getName(),
+    packageName,
     kind,
     module: declarationModule(packageName, declaration),
     signature: symbolSignature(exported.getName(), target, declaration, kind),
+    declaration: symbolDeclaration(exported.getName(), target, declaration, kind),
     description: documentation(target),
+    callSignatures: kind === 'function' ? callableSignatures(target, declaration) : [],
     members:
       kind === 'class'
         ? classMembers(target)
         : kind === 'interface'
           ? interfaceMembers(target)
-          : [],
+          : kind === 'enum'
+            ? enumMembers(target)
+            : [],
   };
+}
+
+function symbolDeclaration(name, symbol, declaration, kind) {
+  const declarations = (symbol.declarations ?? []).filter(
+    (entry) => declarationModuleFromFile(entry.getSourceFile().fileName) !== 'index'
+  );
+  const selected = declarations.length > 0 ? declarations : declaration ? [declaration] : [];
+  if (kind === 'class' && declaration && ts.isClassDeclaration(declaration)) {
+    const declarationText = declaration.getText();
+    const bodyStart = declarationText.indexOf('{');
+    const header = bodyStart >= 0 ? declarationText.slice(0, bodyStart).trim() : `class ${name}`;
+    const publicMembers = declaration.members.filter(
+      (member) => !hasPrivateOrProtectedModifier(member)
+    );
+    return [
+      `${header} {`,
+      ...publicMembers.flatMap((member) =>
+        member
+          .getText()
+          .split('\n')
+          .map((line) => `    ${line}`)
+      ),
+      '}',
+    ].join('\n');
+  }
+  if (
+    selected.length > 0 &&
+    ['function', 'class', 'interface', 'type', 'enum', 'namespace'].includes(kind)
+  ) {
+    return selected
+      .map((entry) => entry.getText().trim())
+      .filter(Boolean)
+      .join('\n\n');
+  }
+  const signature = symbolSignature(name, symbol, declaration, kind);
+  return kind === 'constant' ? `export declare ${signature};` : signature;
 }
 
 function symbolKind(symbol, declaration) {
@@ -348,6 +639,54 @@ function symbolSignature(name, symbol, declaration, kind) {
   return `${kind === 'type' ? 'type' : 'const'} ${name}: ${rendered}`;
 }
 
+function callableSignatures(symbol, declaration) {
+  if (!declaration) return [];
+  const flags =
+    ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
+  const type = checker.getTypeOfSymbolAtLocation(symbol, declaration);
+  return checker.getSignaturesOfType(type, ts.SignatureKind.Call).map((signature) => {
+    const predicate = checker.getTypePredicateOfSignature(signature);
+    return {
+      signature: checker.signatureToString(signature, declaration, flags),
+      description: ts
+        .displayPartsToString(signature.getDocumentationComment(checker))
+        .replace(/\s+/g, ' ')
+        .trim(),
+      parameters: signature.getParameters().map((parameter) => {
+        const parameterDeclaration =
+          parameter.valueDeclaration ?? parameter.declarations?.[0] ?? declaration;
+        const parameterType = checker.getTypeOfSymbolAtLocation(parameter, parameterDeclaration);
+        const rest = Boolean(parameterDeclaration.dotDotDotToken);
+        return {
+          name: `${rest ? '...' : ''}${parameter.getName()}`,
+          type: checker.typeToString(parameterType, parameterDeclaration, flags),
+          optional:
+            Boolean(parameter.flags & ts.SymbolFlags.Optional) ||
+            Boolean(parameterDeclaration.questionToken) ||
+            Boolean(parameterDeclaration.initializer),
+          description: documentation(parameter),
+        };
+      }),
+      returnType: predicate
+        ? checker.typePredicateToString(predicate, declaration, flags)
+        : checker.typeToString(signature.getReturnType(), declaration, flags),
+      returnDescription: jsDocTagText(signature, ['returns', 'return']),
+    };
+  });
+}
+
+function jsDocTagText(signature, names) {
+  const tag = signature.getJsDocTags().find((entry) => names.includes(entry.name));
+  if (!tag?.text) return '';
+  const parts = Array.isArray(tag.text) ? tag.text : [{ text: String(tag.text) }];
+  return parts
+    .map((part) => part.text)
+    .join('')
+    .replace(/^\s*-\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function classMembers(symbol) {
   const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
   if (!declaration) return [];
@@ -360,10 +699,14 @@ function classMembers(symbol) {
   const staticMembers = checker
     .getPropertiesOfType(staticType)
     .filter((member) => member.getName() !== 'prototype' && !isPrivateOrProtected(member))
-    .map((member) => ({
-      ...describeMember(member, declaration),
-      name: `static ${member.getName()}`,
-    }));
+    .map((member) => {
+      const described = describeMember(member, declaration);
+      return {
+        ...described,
+        name: `static ${member.getName()}`,
+        signature: `static ${described.signature}`,
+      };
+    });
   const constructors = checker
     .getSignaturesOfType(staticType, ts.SignatureKind.Construct)
     .map((signature, index) => ({
@@ -386,10 +729,35 @@ function interfaceMembers(symbol) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function enumMembers(symbol) {
+  const declaration = symbol.declarations?.find(ts.isEnumDeclaration);
+  if (!declaration) return [];
+  return declaration.members.map((member) => {
+    const memberSymbol = checker.getSymbolAtLocation(member.name);
+    const name = member.name.getText();
+    const value = checker.getConstantValue(member);
+    return {
+      name,
+      kind: 'enum-member',
+      signature:
+        value === undefined
+          ? name
+          : `${name} = ${typeof value === 'string' ? JSON.stringify(value) : value}`,
+      description: memberSymbol ? documentation(memberSymbol) : '',
+    };
+  });
+}
+
 function describeMember(member, location) {
   const declaration = member.valueDeclaration ?? member.declarations?.[0] ?? location;
   const type = checker.getTypeOfSymbolAtLocation(member, declaration);
   const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
+  const optional =
+    Boolean(member.flags & ts.SymbolFlags.Optional) || Boolean(declaration.questionToken);
+  const readonly = Boolean(
+    declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword)
+  );
+  const memberName = `${readonly ? 'readonly ' : ''}${member.getName()}${optional ? '?' : ''}`;
   return {
     name: member.getName(),
     kind: calls.length > 0 ? 'method' : 'property',
@@ -398,21 +766,23 @@ function describeMember(member, location) {
         ? calls
             .map(
               (signature) =>
-                `${member.getName()}${checker.signatureToString(signature, declaration, ts.TypeFormatFlags.NoTruncation)}`
+                `${memberName}${checker.signatureToString(signature, declaration, ts.TypeFormatFlags.NoTruncation)}`
             )
             .join(' | ')
-        : `${member.getName()}: ${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)}`,
+        : `${memberName}: ${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)}`,
     description: documentation(member),
   };
 }
 
 function isPrivateOrProtected(symbol) {
-  return (symbol.declarations ?? []).some((declaration) =>
-    declaration.modifiers?.some(
-      (modifier) =>
-        modifier.kind === ts.SyntaxKind.PrivateKeyword ||
-        modifier.kind === ts.SyntaxKind.ProtectedKeyword
-    )
+  return (symbol.declarations ?? []).some(hasPrivateOrProtectedModifier);
+}
+
+function hasPrivateOrProtectedModifier(declaration) {
+  return declaration.modifiers?.some(
+    (modifier) =>
+      modifier.kind === ts.SyntaxKind.PrivateKeyword ||
+      modifier.kind === ts.SyntaxKind.ProtectedKeyword
   );
 }
 
@@ -423,6 +793,16 @@ function declarationModule(packageName, declaration) {
     .relative(dist, declaration.getSourceFile().fileName)
     .replaceAll(path.sep, '/');
   return relative.replace(/\.d\.(?:mts|cts|ts)$/, '') || 'index';
+}
+
+function declarationModuleFromFile(fileName) {
+  const relative = path.relative(root, fileName).replaceAll(path.sep, '/');
+  return (
+    relative
+      .replace(/\.d\.(?:mts|cts|ts)$/, '')
+      .split('/')
+      .at(-1) || 'index'
+  );
 }
 
 function documentation(symbol) {
@@ -459,9 +839,21 @@ function kindLabel(kind, language) {
       constructor: '构造函数',
       method: '方法',
       property: '属性',
+      'enum-member': '枚举成员',
       other: '其他',
     }[kind] ?? kind
   );
+}
+
+function kindCount(kind, count, language) {
+  const label = kindLabel(kind, language);
+  if (language === 'zh' || count === 1) return `${count} ${label}`;
+  const plural =
+    {
+      class: 'classes',
+      property: 'properties',
+    }[kind] ?? `${label}s`;
+  return `${count} ${plural}`;
 }
 
 function fallbackDescription(item, language) {
@@ -486,17 +878,29 @@ function fallbackDescription(item, language) {
   }
   if (item.kind === 'class') {
     return language === 'zh'
-      ? `${subject} 的运行时实现；公开构造函数与成员见下表。`
-      : `Runtime implementation for ${subject}; see its public constructor and members below.`;
+      ? `${subject} 类，共公开 ${item.members.length} 个构造函数或成员；精确签名见本条目的声明与成员表。`
+      : `${subject} class with ${item.members.length} public constructor or member entries; its exact declarations are listed below.`;
   }
   if (item.kind === 'interface') {
     return language === 'zh'
-      ? `${subject} 的字段契约；完整字段见下表。`
-      : `Field contract for ${subject}; see all contract members below.`;
+      ? `${subject} 接口，共包含 ${item.members.length} 个公开字段或方法。`
+      : `${subject} interface with ${item.members.length} public fields or methods.`;
   }
-  if (item.kind === 'function') return inferOperation(item.name, subject, language);
+  if (item.kind === 'function') {
+    const overloads = item.callSignatures.length;
+    return language === 'zh'
+      ? `${subject} 函数，提供 ${overloads} 个公开调用签名；参数与返回类型见下表。`
+      : `${subject} function with ${overloads} public call signature${overloads === 1 ? '' : 's'}; parameters and return types are listed below.`;
+  }
   if (item.kind === 'type') {
-    return language === 'zh' ? `${subject} 的公共类型别名。` : `Public type alias for ${subject}.`;
+    return language === 'zh'
+      ? `${subject} 公共类型别名；完整类型表达式见声明。`
+      : `Public type alias for ${subject}; the declaration contains its complete type expression.`;
+  }
+  if (item.kind === 'enum') {
+    return language === 'zh'
+      ? `${subject} 枚举，共包含 ${item.members.length} 个公开成员。`
+      : `${subject} enum with ${item.members.length} public members.`;
   }
   return language === 'zh'
     ? `由 \`${item.module}\` 模块导出的 ${subject} ${kindLabel(item.kind, language)}。`
@@ -508,62 +912,62 @@ function fallbackMemberDescription(member, language) {
     return language === 'zh' ? '创建该类的实例。' : 'Creates an instance of this class.';
   }
   if (member.kind === 'property') {
-    const subject = humanize(member.name.replace(/^static /, ''));
-    return language === 'zh' ? `${subject} 字段。` : `Public ${subject} property.`;
+    return language === 'zh'
+      ? '公开属性；类型、只读和可选状态以签名列为准。'
+      : 'Public property; its type, readonly modifier and optionality are shown in the signature.';
   }
-  return inferOperation(member.name.replace(/^static /, ''), humanize(member.name), language);
+  if (member.kind === 'enum-member') {
+    return language === 'zh'
+      ? '枚举成员；显式值或推导值见签名。'
+      : 'Enum member; its explicit or inferred value is shown in the signature.';
+  }
+  return language === 'zh'
+    ? '公开方法；参数与返回类型以签名列为准。'
+    : 'Public method; parameters and return type are shown in the signature.';
 }
 
-function inferOperation(name, subject, language) {
-  const operations = [
-    ['create', '创建', 'Creates'],
-    ['build', '构建', 'Builds'],
-    ['compile', '编译', 'Compiles'],
-    ['parse', '解析并校验', 'Parses and validates'],
-    ['validate', '校验', 'Validates'],
-    ['normalize', '规范化', 'Normalizes'],
-    ['serialize', '序列化', 'Serializes'],
-    ['deserialize', '反序列化', 'Deserializes'],
-    ['analyze', '分析', 'Analyzes'],
-    ['evaluate', '评估', 'Evaluates'],
-    ['plan', '规划', 'Plans'],
-    ['apply', '应用', 'Applies'],
-    ['resolve', '解析', 'Resolves'],
-    ['register', '注册', 'Registers'],
-    ['load', '加载', 'Loads'],
-    ['save', '保存', 'Saves'],
-    ['append', '追加', 'Appends'],
-    ['record', '记录', 'Records'],
-    ['project', '投影', 'Projects'],
-    ['assert', '断言', 'Asserts'],
-    ['list', '列出', 'Lists'],
-    ['get', '读取', 'Gets'],
-    ['set', '写入', 'Sets'],
-    ['delete', '删除', 'Deletes'],
-    ['remove', '移除', 'Removes'],
-    ['start', '启动', 'Starts'],
-    ['cancel', '取消', 'Cancels'],
-    ['transition', '迁移', 'Transitions'],
-    ['decide', '决定', 'Decides'],
-    ['can', '判断能否', 'Checks whether it can'],
-    ['on', '处理', 'Handles'],
-    ['is', '判断', 'Checks'],
-    ['has', '判断是否存在', 'Checks whether'],
-  ];
-  const match = operations.find(([prefix]) => name.toLowerCase().startsWith(prefix));
-  if (!match) {
-    return language === 'zh'
-      ? `${subject} 的公开运行时操作。`
-      : `Public runtime operation for ${subject}.`;
-  }
-  const remainder = humanize(name.slice(match[0].length)) || subject;
+function fallbackParameterDescription(parameter, language) {
+  const requirement = parameter.optional
+    ? language === 'zh'
+      ? '可选'
+      : 'Optional'
+    : language === 'zh'
+      ? '必需'
+      : 'Required';
   return language === 'zh'
-    ? `${match[1]} ${remainder}。`
-    : `${match[2]} ${remainder} at this module boundary.`;
+    ? `${requirement}参数；接受的值由类型列定义。`
+    : `${requirement} parameter; accepted values are defined by the type column.`;
+}
+
+function fallbackReturnDescription(callable, language) {
+  if (callable.returnType === 'void') {
+    return language === 'zh' ? '不返回值。' : 'Returns no value.';
+  }
+  return language === 'zh'
+    ? '返回值契约由上述类型定义。'
+    : 'The return contract is defined by the type shown above.';
+}
+
+function importStatement(packageLabel, item) {
+  const keyword = item.kind === 'interface' || item.kind === 'type' ? 'import type' : 'import';
+  return `${keyword} { ${item.name} } from '${packageLabel}';`;
+}
+
+function isCompactedDeclaration(item) {
+  return item.kind === 'constant' && item.declaration.length > 4000;
+}
+
+function declarationForDisplay(item, language) {
+  if (!isCompactedDeclaration(item)) return item.declaration;
+  const comment =
+    language === 'zh'
+      ? '// 精确类型由包入口解析；完整编译器展开定义见源码链接。'
+      : '// Exact type resolved from the package entrypoint; see source for the compiler expansion.';
+  return `${comment}\nexport declare const ${item.name}: (typeof import('@codesoul-co/hypha-${item.packageName}'))['${item.name}'];`;
 }
 
 function humanize(value) {
-  return value
+  const normalized = value
     .replace(/^static /, '')
     .replace(/SpecDefinition$/, ' spec')
     .replace(/JsonSchema$/, ' JSON schema')
@@ -572,7 +976,17 @@ function humanize(value) {
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')
-    .trim();
+    .trim()
+    .replace(/\bSQ Lite\b/g, 'SQLite')
+    .replace(/\bRe Act\b/g, 'ReAct')
+    .replace(/\bFsm\b/gi, 'FSM')
+    .replace(/\bMcp\b/gi, 'MCP')
+    .replace(/\bJson\b/gi, 'JSON')
+    .replace(/\bApi\b/gi, 'API')
+    .replace(/\bId\b/g, 'ID')
+    .replace(/\bUrl\b/g, 'URL')
+    .replace(/\bUuid\b/gi, 'UUID');
+  return normalized ? `${normalized[0].toUpperCase()}${normalized.slice(1)}` : normalized;
 }
 
 function sourcePath(moduleName) {
@@ -589,6 +1003,10 @@ function modulePagePath(moduleName) {
 
 function escapeCode(value) {
   return value.replaceAll('`', '\\`');
+}
+
+function escapeInlineCode(value) {
+  return value.replaceAll('`', '\\`').replace(/\s+/g, ' ');
 }
 
 function escapeHtml(value) {

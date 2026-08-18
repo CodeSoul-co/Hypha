@@ -2,15 +2,14 @@
 
 This directory contains public documentation for using hypha APIs, specs, runtime conventions, and extension points. It intentionally describes stable contracts rather than internal planning notes.
 
-The published v1.0.1 user guide, feature map, complete generated API reference, FSM walkthrough, and
+The published v1.0.1 user guide, complete generated API reference, FSM walkthrough, and
 full-system example are available at
 [codesoul-co.github.io/Hypha](https://codesoul-co.github.io/Hypha/). The project website is
 [hypha.code-soul.com](https://hypha.code-soul.com/).
 
-## Start Here
+## API and usage documentation
 
-- [Feature Map](https://codesoul-co.github.io/Hypha/guide/capability-map): end-to-end execution stages mapped to packages, modules, principal classes/functions, and isolated examples.
-- [Complete API Reference](https://codesoul-co.github.io/Hypha/api/): every public package export grouped by source module, including signatures and public class/interface members.
+- [Complete API Reference](https://codesoul-co.github.io/Hypha/api/): every public package export grouped by source module, including full declarations, imports, function parameters and returns, and class/interface members.
 - [Runnable Examples](https://codesoul-co.github.io/Hypha/guide/examples): seven isolated feature entries, a 15-package tour, DomainPack compilation, Server Run submission, and custom FSM control.
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.
 - [Runtime Model](reference/runtime-model.md): DomainPack, Session, Run, Event, durable orchestration, FSM, replay, audit, regression, and concurrency conventions.
@@ -35,8 +34,6 @@ full-system example are available at
 
 ## Guides
 
-- [Development Workflow](guides/development-workflow.md): direct `dev` maintenance, release gates,
-  and the `dev` → `main` publication path.
 - [Releases and npm Packages](guides/releases.md): version alignment, package verification,
   publication boundaries, and the standalone consumer example.
 - [Upgrading Hypha](../UPGRADING.md): npm and source-release update, configuration migration,

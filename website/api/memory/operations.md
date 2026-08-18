@@ -1,278 +1,748 @@
 # `@codesoul-co/hypha-memory` / `operations`
 
 - Package index: [`@codesoul-co/hypha-memory`](/api/memory)
-- Package guide: [learning and composition guide](/packages/memory)
 - Source: [`packages/memory/src/operations.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
 - Exports: **20**
+
+## Using this module
+
+Use the Operations module for using the public contracts and operations for this capability boundary. It exports 20 interfaces.
+
+### Import from the package entrypoint
+
+```ts
+import type {
+  ManagedMemoryDeleteRequest,
+  ManagedMemoryDeleteResult,
+  ManagedMemorySearchRequest,
+  ManagedMemorySearchResult,
+  ManagedMemoryUpdateRequest,
+  ManagedMemoryWriteResult,
+  MemoryAddRequest,
+  MemoryGetRequest,
+} from '@codesoul-co/hypha-memory';
+
+// The complete export list is documented below.
+```
+
+### Usage patterns
+
+- Use the 20 type/interface exports as static contracts in application code, adapters, or tests. Import them with `import type`; they do not exist at runtime.
+
 
 ## Public exports
 
 | Symbol | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `ManagedMemoryDeleteRequest` | interface | <code>interface ManagedMemoryDeleteRequest</code> | Field contract for Managed Memory Delete Request; see all contract members below. |
-| `ManagedMemoryDeleteResult` | interface | <code>interface ManagedMemoryDeleteResult</code> | Field contract for Managed Memory Delete Result; see all contract members below. |
-| `ManagedMemorySearchRequest` | interface | <code>interface ManagedMemorySearchRequest</code> | Field contract for Managed Memory Search Request; see all contract members below. |
-| `ManagedMemorySearchResult` | interface | <code>interface ManagedMemorySearchResult</code> | Field contract for Managed Memory Search Result; see all contract members below. |
-| `ManagedMemoryUpdateRequest` | interface | <code>interface ManagedMemoryUpdateRequest</code> | Field contract for Managed Memory Update Request; see all contract members below. |
-| `ManagedMemoryWriteResult` | interface | <code>interface ManagedMemoryWriteResult</code> | Field contract for Managed Memory Write Result; see all contract members below. |
-| `MemoryAddRequest` | interface | <code>interface MemoryAddRequest</code> | Field contract for Memory Add Request; see all contract members below. |
-| `MemoryGetRequest` | interface | <code>interface MemoryGetRequest</code> | Field contract for Memory Get Request; see all contract members below. |
-| `MemoryHistoryRequest` | interface | <code>interface MemoryHistoryRequest</code> | Field contract for Memory History Request; see all contract members below. |
-| `MemoryIndexJobRef` | interface | <code>interface MemoryIndexJobRef</code> | Field contract for Memory Index Job Ref; see all contract members below. |
-| `MemoryListRequest` | interface | <code>interface MemoryListRequest</code> | Field contract for Memory List Request; see all contract members below. |
-| `MemoryListResult` | interface | <code>interface MemoryListResult extends PaginationResult</code> | Field contract for Memory List Result; see all contract members below. |
-| `MemoryManagementProvider` | interface | <code>interface MemoryManagementProvider</code> | Field contract for Memory Management Provider; see all contract members below. |
-| `MemoryPatch` | interface | <code>interface MemoryPatch</code> | Field contract for Memory Patch; see all contract members below. |
-| `MemoryRejectedItem` | interface | <code>interface MemoryRejectedItem</code> | Field contract for Memory Rejected Item; see all contract members below. |
-| `MemorySearchFilter` | interface | <code>interface MemorySearchFilter</code> | Field contract for Memory Search Filter; see all contract members below. |
-| `MemoryVersion` | interface | <code>interface MemoryVersion</code> | Field contract for Memory Version; see all contract members below. |
-| `PaginationRequest` | interface | <code>interface PaginationRequest</code> | Field contract for Pagination Request; see all contract members below. |
-| `PaginationResult` | interface | <code>interface PaginationResult</code> | Field contract for Pagination Result; see all contract members below. |
-| `ProviderHealth` | interface | <code>interface ProviderHealth</code> | Field contract for Provider Health; see all contract members below. |
+| `ManagedMemoryDeleteRequest` | interface | <code>interface ManagedMemoryDeleteRequest</code> | Managed Memory Delete Request interface with 8 public fields or methods. |
+| `ManagedMemoryDeleteResult` | interface | <code>interface ManagedMemoryDeleteResult</code> | Managed Memory Delete Result interface with 6 public fields or methods. |
+| `ManagedMemorySearchRequest` | interface | <code>interface ManagedMemorySearchRequest</code> | Managed Memory Search Request interface with 20 public fields or methods. |
+| `ManagedMemorySearchResult` | interface | <code>interface ManagedMemorySearchResult</code> | Managed Memory Search Result interface with 7 public fields or methods. |
+| `ManagedMemoryUpdateRequest` | interface | <code>interface ManagedMemoryUpdateRequest</code> | Managed Memory Update Request interface with 8 public fields or methods. |
+| `ManagedMemoryWriteResult` | interface | <code>interface ManagedMemoryWriteResult</code> | Managed Memory Write Result interface with 7 public fields or methods. |
+| `MemoryAddRequest` | interface | <code>interface MemoryAddRequest</code> | Memory Add Request interface with 13 public fields or methods. |
+| `MemoryGetRequest` | interface | <code>interface MemoryGetRequest</code> | Memory Get Request interface with 5 public fields or methods. |
+| `MemoryHistoryRequest` | interface | <code>interface MemoryHistoryRequest</code> | Memory History Request interface with 5 public fields or methods. |
+| `MemoryIndexJobRef` | interface | <code>interface MemoryIndexJobRef</code> | Memory Index Job Ref interface with 2 public fields or methods. |
+| `MemoryListRequest` | interface | <code>interface MemoryListRequest</code> | Memory List Request interface with 5 public fields or methods. |
+| `MemoryListResult` | interface | <code>interface MemoryListResult extends PaginationResult</code> | Memory List Result interface with 3 public fields or methods. |
+| `MemoryManagementProvider` | interface | <code>interface MemoryManagementProvider</code> | Memory Management Provider interface with 11 public fields or methods. |
+| `MemoryPatch` | interface | <code>interface MemoryPatch</code> | Memory Patch interface with 8 public fields or methods. |
+| `MemoryRejectedItem` | interface | <code>interface MemoryRejectedItem</code> | Memory Rejected Item interface with 3 public fields or methods. |
+| `MemorySearchFilter` | interface | <code>interface MemorySearchFilter</code> | Memory Search Filter interface with 18 public fields or methods. |
+| `MemoryVersion` | interface | <code>interface MemoryVersion</code> | Memory Version interface with 4 public fields or methods. |
+| `PaginationRequest` | interface | <code>interface PaginationRequest</code> | Pagination Request interface with 7 public fields or methods. |
+| `PaginationResult` | interface | <code>interface PaginationResult</code> | Pagination Result interface with 2 public fields or methods. |
+| `ProviderHealth` | interface | <code>interface ProviderHealth</code> | Provider Health interface with 5 public fields or methods. |
 
-## `ManagedMemoryDeleteRequest` contract members
+## `ManagedMemoryDeleteRequest`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `filter` | property | <code>filter: MemorySearchFilter</code> | Public filter property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `memoryIds` | property | <code>memoryIds: string[]</code> | Public memory Ids property. |
-| `mode` | property | <code>mode: "soft" &#124; "hard" &#124; "compliance"</code> | Public mode property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
+Managed Memory Delete Request interface with 8 public fields or methods.
 
-## `ManagedMemoryDeleteResult` contract members
+- Kind: interface
+- Import: `import type { ManagedMemoryDeleteRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `deletedMemoryIds` | property | <code>deletedMemoryIds: string[]</code> | Public deleted Memory Ids property. |
-| `events` | property | <code>events: string[]</code> | Public events property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `pendingProviderIds` | property | <code>pendingProviderIds: string[]</code> | Public pending Provider Ids property. |
-| `status` | property | <code>status: "completed" &#124; "rejected" &#124; "failed" &#124; "partial"</code> | Public status property. |
-| `warnings` | property | <code>warnings: string[]</code> | Public warnings property. |
+### Declaration
 
-## `ManagedMemorySearchRequest` contract members
+```text
+export interface ManagedMemoryDeleteRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    memoryIds?: string[];
+    filter?: MemorySearchFilter;
+    mode: 'soft' | 'hard' | 'compliance';
+    reason: string;
+    idempotencyKey?: string;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `filters` | property | <code>filters: MemorySearchFilter</code> | Public filters property. |
-| `includeContent` | property | <code>includeContent: boolean</code> | Public include Content property. |
-| `includeDormant` | property | <code>includeDormant: boolean</code> | Public include Dormant property. |
-| `includeProvenance` | property | <code>includeProvenance: boolean</code> | Public include Provenance property. |
-| `includeRelations` | property | <code>includeRelations: boolean</code> | Public include Relations property. |
-| `includeSuperseded` | property | <code>includeSuperseded: boolean</code> | Public include Superseded property. |
-| `memoryTypes` | property | <code>memoryTypes: ManagedMemoryType[]</code> | Public memory Types property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `mode` | property | <code>mode: "structured" &#124; "hybrid" &#124; "semantic" &#124; "keyword" &#124; "graph"</code> | Public mode property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `pagination` | property | <code>pagination: PaginationRequest</code> | Public pagination property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `query` | property | <code>query: string</code> | Public query property. |
-| `queryEmbedding` | property | <code>queryEmbedding: number[]</code> | Public query Embedding property. |
-| `rerank` | property | <code>rerank: boolean</code> | Public rerank property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-| `scoreThreshold` | property | <code>scoreThreshold: number</code> | Public score Threshold property. |
-| `topK` | property | <code>topK: number</code> | Public top K property. |
-| `updateAccessStats` | property | <code>updateAccessStats: boolean</code> | Public update Access Stats property. |
-
-## `ManagedMemorySearchResult` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `graphScore` | property | <code>graphScore: number</code> | Public graph Score property. |
-| `keywordScore` | property | <code>keywordScore: number</code> | Public keyword Score property. |
-| `reasons` | property | <code>reasons: string[]</code> | Public reasons property. |
-| `record` | property | <code>record: ManagedMemoryRecord&lt;unknown&gt;</code> | Public record property. |
-| `rerankScore` | property | <code>rerankScore: number</code> | Public rerank Score property. |
-| `score` | property | <code>score: number</code> | Public score property. |
-| `semanticScore` | property | <code>semanticScore: number</code> | Public semantic Score property. |
+| `filter` | property | <code>filter?: MemorySearchFilter</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryIds` | property | <code>memoryIds?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode: "soft" &#124; "hard" &#124; "compliance"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ManagedMemoryUpdateRequest` contract members
+## `ManagedMemoryDeleteResult`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `expectedRevision` | property | <code>expectedRevision: number</code> | Public expected Revision property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `memoryId` | property | <code>memoryId: string</code> | Public memory Id property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `patch` | property | <code>patch: MemoryPatch</code> | Public patch property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
+Managed Memory Delete Result interface with 6 public fields or methods.
 
-## `ManagedMemoryWriteResult` contract members
+- Kind: interface
+- Import: `import type { ManagedMemoryDeleteResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `events` | property | <code>events: string[]</code> | Public events property. |
-| `indexJobs` | property | <code>indexJobs: MemoryIndexJobRef[]</code> | Public index Jobs property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `records` | property | <code>records: ManagedMemoryRecord&lt;unknown&gt;[]</code> | Public records property. |
-| `rejectedItems` | property | <code>rejectedItems: MemoryRejectedItem[]</code> | Public rejected Items property. |
-| `status` | property | <code>status: "rejected" &#124; "queued" &#124; "failed" &#124; "committed" &#124; "reused" &#124; "partial"</code> | Public status property. |
-| `warnings` | property | <code>warnings: string[]</code> | Public warnings property. |
+### Declaration
 
-## `MemoryAddRequest` contract members
+```text
+export interface ManagedMemoryDeleteResult {
+    operationId: string;
+    status: 'completed' | 'partial' | 'rejected' | 'failed';
+    deletedMemoryIds: string[];
+    pendingProviderIds?: string[];
+    events?: string[];
+    warnings?: string[];
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `extractionMode` | property | <code>extractionMode: "none" &#124; "provider" &#124; "custom" &#124; "native"</code> | Public extraction Mode property. |
-| `idempotencyKey` | property | <code>idempotencyKey: string</code> | Public idempotency Key property. |
-| `input` | property | <code>input: unknown</code> | Public input property. |
-| `inputType` | property | <code>inputType: "structured" &#124; "text" &#124; "message" &#124; "artifact_ref" &#124; "event_ref"</code> | Public input Type property. |
-| `memoryType` | property | <code>memoryType: ManagedMemoryType</code> | Public memory Type property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public profile Ref property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-| `source` | property | <code>source: MemorySource</code> | Public source property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
-| `writeMode` | property | <code>writeMode: "sync" &#124; "async"</code> | Public write Mode property. |
+| `deletedMemoryIds` | property | <code>deletedMemoryIds: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `events` | property | <code>events?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pendingProviderIds` | property | <code>pendingProviderIds?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status: "completed" &#124; "rejected" &#124; "failed" &#124; "partial"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `warnings` | property | <code>warnings?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `MemoryGetRequest` contract members
+## `ManagedMemorySearchRequest`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `includeHistory` | property | <code>includeHistory: boolean</code> | Public include History property. |
-| `memoryId` | property | <code>memoryId: string</code> | Public memory Id property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
+Managed Memory Search Request interface with 20 public fields or methods.
 
-## `MemoryHistoryRequest` contract members
+- Kind: interface
+- Import: `import type { ManagedMemorySearchRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `memoryId` | property | <code>memoryId: string</code> | Public memory Id property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `pagination` | property | <code>pagination: PaginationRequest</code> | Public pagination property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
+### Declaration
 
-## `MemoryIndexJobRef` contract members
+```text
+export interface ManagedMemorySearchRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    profileRef: MemoryContractSpecRef;
+    query?: string;
+    queryEmbedding?: number[];
+    filters?: MemorySearchFilter;
+    memoryTypes?: ManagedMemoryType[];
+    mode?: 'structured' | 'semantic' | 'keyword' | 'hybrid' | 'graph';
+    topK?: number;
+    scoreThreshold?: number;
+    includeDormant?: boolean;
+    includeSuperseded?: boolean;
+    includeContent?: boolean;
+    includeProvenance?: boolean;
+    includeRelations?: boolean;
+    rerank?: boolean;
+    updateAccessStats?: boolean;
+    pagination?: PaginationRequest;
+    metadata?: Record<string, unknown>;
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `state` | property | <code>state: "completed" &#124; "failed" &#124; "processing" &#124; "pending" &#124; "partial"</code> | Public state property. |
-
-## `MemoryListRequest` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `filter` | property | <code>filter: MemorySearchFilter</code> | Public filter property. |
-| `operationId` | property | <code>operationId: string</code> | Public operation Id property. |
-| `pagination` | property | <code>pagination: PaginationRequest</code> | Public pagination property. |
-| `principal` | property | <code>principal: MemoryPrincipal</code> | Public principal property. |
-| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public scope property. |
-
-## `MemoryListResult` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `hasMore` | property | <code>hasMore: boolean</code> | Public has More property. |
-| `nextCursor` | property | <code>nextCursor: string</code> | Public next Cursor property. |
-| `records` | property | <code>records: ManagedMemoryRecord&lt;unknown&gt;[]</code> | Public records property. |
+| `filters` | property | <code>filters?: MemorySearchFilter</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeContent` | property | <code>includeContent?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeDormant` | property | <code>includeDormant?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeProvenance` | property | <code>includeProvenance?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeRelations` | property | <code>includeRelations?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `includeSuperseded` | property | <code>includeSuperseded?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryTypes` | property | <code>memoryTypes?: ManagedMemoryType[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `mode` | property | <code>mode?: "structured" &#124; "hybrid" &#124; "semantic" &#124; "keyword" &#124; "graph"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pagination` | property | <code>pagination?: PaginationRequest</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `query` | property | <code>query?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `queryEmbedding` | property | <code>queryEmbedding?: number[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rerank` | property | <code>rerank?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scoreThreshold` | property | <code>scoreThreshold?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `topK` | property | <code>topK?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updateAccessStats` | property | <code>updateAccessStats?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `MemoryManagementProvider` contract members
+## `ManagedMemorySearchResult`
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `add` | method | <code>add(request: MemoryAddRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public runtime operation for add. |
-| `capabilities` | method | <code>capabilities(): Promise&lt;import("./contracts").MemoryManagementCapabilities&gt;</code> | Public runtime operation for capabilities. |
-| `close` | method | <code>close(): Promise&lt;void&gt;</code> | Public runtime operation for close. |
-| `delete` | method | <code>delete(request: ManagedMemoryDeleteRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryDeleteResult&gt;</code> | Deletes delete at this module boundary. |
-| `get` | method | <code>get(request: MemoryGetRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryRecord &#124; null&gt;</code> | Gets get at this module boundary. |
-| `health` | method | <code>health(): Promise&lt;ProviderHealth&gt;</code> | Public runtime operation for health. |
-| `history` | method | <code>history(request: MemoryHistoryRequest, signal?: AbortSignal): Promise&lt;MemoryVersion[]&gt;</code> | Public runtime operation for history. |
-| `id` | property | <code>id: string</code> | Public id property. |
-| `list` | method | <code>list(request: MemoryListRequest, signal?: AbortSignal): Promise&lt;MemoryListResult&gt;</code> | Lists list at this module boundary. |
-| `search` | method | <code>search(request: ManagedMemorySearchRequest, signal?: AbortSignal): Promise&lt;ManagedMemorySearchResult[]&gt;</code> | Public runtime operation for search. |
-| `update` | method | <code>update(request: ManagedMemoryUpdateRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public runtime operation for update. |
+Managed Memory Search Result interface with 7 public fields or methods.
 
-## `MemoryPatch` contract members
+- Kind: interface
+- Import: `import type { ManagedMemorySearchResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `canonicalText` | property | <code>canonicalText: string</code> | Public canonical Text property. |
-| `confidence` | property | <code>confidence: number</code> | Public confidence property. |
-| `content` | property | <code>content: unknown</code> | Public content property. |
-| `importance` | property | <code>importance: number</code> | Public importance property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `status` | property | <code>status: "failed" &#124; "invalidated" &#124; "deletion_pending" &#124; "active" &#124; "pending" &#124; "superseded" &#124; "dormant"</code> | Public status property. |
-| `summary` | property | <code>summary: string</code> | Public summary property. |
-| `tags` | property | <code>tags: string[]</code> | Public tags property. |
+### Declaration
 
-## `MemoryRejectedItem` contract members
+```text
+export interface ManagedMemorySearchResult {
+    record: ManagedMemoryRecord;
+    score?: number;
+    semanticScore?: number;
+    keywordScore?: number;
+    graphScore?: number;
+    rerankScore?: number;
+    reasons?: string[];
+}
+```
 
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `error` | property | <code>error: NormalizedMemoryError</code> | Public error property. |
-| `itemId` | property | <code>itemId: string</code> | Public item Id property. |
-| `reason` | property | <code>reason: string</code> | Public reason property. |
-
-## `MemorySearchFilter` contract members
-
-| Member | Kind | Signature | Description |
-| --- | --- | --- | --- |
-| `canonicalKeys` | property | <code>canonicalKeys: string[]</code> | Public canonical Keys property. |
-| `confidenceGte` | property | <code>confidenceGte: number</code> | Public confidence Gte property. |
-| `conflictFreeOnly` | property | <code>conflictFreeOnly: boolean</code> | Public conflict Free Only property. |
-| `createdAfter` | property | <code>createdAfter: string</code> | Public created After property. |
-| `createdBefore` | property | <code>createdBefore: string</code> | Public created Before property. |
-| `entityIds` | property | <code>entityIds: string[]</code> | Public entity Ids property. |
-| `excludeIds` | property | <code>excludeIds: string[]</code> | Public exclude Ids property. |
-| `expiresAfter` | property | <code>expiresAfter: string</code> | Public expires After property. |
-| `ids` | property | <code>ids: string[]</code> | Public ids property. |
-| `importanceGte` | property | <code>importanceGte: number</code> | Public importance Gte property. |
-| `metadata` | property | <code>metadata: Record&lt;string, unknown&gt;</code> | Public metadata property. |
-| `sourceTypes` | property | <code>sourceTypes: ("human_review" &#124; "artifact" &#124; "system" &#124; "derived" &#124; "user_message" &#124; "assistant_message" &#124; "tool_result" &#124; "workflow_state" &#124; "import")[]</code> | Public source Types property. |
-| `statuses` | property | <code>statuses: MemoryStatus[]</code> | Public statuses property. |
-| `tagsAll` | property | <code>tagsAll: string[]</code> | Public tags All property. |
-| `tagsAny` | property | <code>tagsAny: string[]</code> | Public tags Any property. |
-| `updatedAfter` | property | <code>updatedAfter: string</code> | Public updated After property. |
-| `verifiedOnly` | property | <code>verifiedOnly: boolean</code> | Public verified Only property. |
-| `visibility` | property | <code>visibility: ("workspace" &#124; "session" &#124; "private" &#124; "shared" &#124; "tenant")[]</code> | Public visibility property. |
-
-## `MemoryVersion` contract members
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `memoryId` | property | <code>memoryId: string</code> | Public memory Id property. |
-| `record` | property | <code>record: ManagedMemoryRecord&lt;unknown&gt;</code> | Public record property. |
-| `revision` | property | <code>revision: number</code> | Public revision property. |
-| `versionId` | property | <code>versionId: string</code> | Public version Id property. |
+| `graphScore` | property | <code>graphScore?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `keywordScore` | property | <code>keywordScore?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reasons` | property | <code>reasons?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `record` | property | <code>record: ManagedMemoryRecord&lt;unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rerankScore` | property | <code>rerankScore?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `score` | property | <code>score?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `semanticScore` | property | <code>semanticScore?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PaginationRequest` contract members
+## `ManagedMemoryUpdateRequest`
+
+Managed Memory Update Request interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ManagedMemoryUpdateRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface ManagedMemoryUpdateRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    memoryId: string;
+    expectedRevision?: number;
+    patch: MemoryPatch;
+    reason: string;
+    idempotencyKey?: string;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `cursor` | property | <code>cursor: string</code> | Public cursor property. |
-| `limit` | property | <code>limit: number</code> | Public limit property. |
-| `maxBytes` | property | <code>maxBytes: number</code> | Public max Bytes property. |
-| `maxCalls` | property | <code>maxCalls: number</code> | Public max Calls property. |
-| `maxDurationMs` | property | <code>maxDurationMs: number</code> | Public max Duration Ms property. |
-| `maxItems` | property | <code>maxItems: number</code> | Public max Items property. |
-| `maxPages` | property | <code>maxPages: number</code> | Public max Pages property. |
+| `expectedRevision` | property | <code>expectedRevision?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryId` | property | <code>memoryId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `patch` | property | <code>patch: MemoryPatch</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `PaginationResult` contract members
+## `ManagedMemoryWriteResult`
+
+Managed Memory Write Result interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ManagedMemoryWriteResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface ManagedMemoryWriteResult {
+    operationId: string;
+    status: 'committed' | 'queued' | 'reused' | 'rejected' | 'partial' | 'failed';
+    records: ManagedMemoryRecord[];
+    rejectedItems?: MemoryRejectedItem[];
+    indexJobs?: MemoryIndexJobRef[];
+    events?: string[];
+    warnings?: string[];
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `hasMore` | property | <code>hasMore: boolean</code> | Public has More property. |
-| `nextCursor` | property | <code>nextCursor: string</code> | Public next Cursor property. |
+| `events` | property | <code>events?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `indexJobs` | property | <code>indexJobs?: MemoryIndexJobRef[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `records` | property | <code>records: ManagedMemoryRecord&lt;unknown&gt;[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `rejectedItems` | property | <code>rejectedItems?: MemoryRejectedItem[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status: "rejected" &#124; "queued" &#124; "failed" &#124; "committed" &#124; "reused" &#124; "partial"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `warnings` | property | <code>warnings?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
 
-## `ProviderHealth` contract members
+## `MemoryAddRequest`
+
+Memory Add Request interface with 13 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryAddRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryAddRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    input: unknown;
+    inputType?: 'message' | 'text' | 'structured' | 'artifact_ref' | 'event_ref';
+    memoryType?: ManagedMemoryType;
+    source: MemorySource;
+    extractionMode?: 'none' | 'native' | 'provider' | 'custom';
+    writeMode?: 'sync' | 'async';
+    idempotencyKey?: string;
+    profileRef: MemoryContractSpecRef;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
 
 | Member | Kind | Signature | Description |
 | --- | --- | --- | --- |
-| `checkedAt` | property | <code>checkedAt: string</code> | Public checked At property. |
-| `details` | property | <code>details: Record&lt;string, unknown&gt;</code> | Public details property. |
-| `latencyMs` | property | <code>latencyMs: number</code> | Public latency Ms property. |
-| `message` | property | <code>message: string</code> | Public message property. |
-| `status` | property | <code>status: "healthy" &#124; "degraded" &#124; "unhealthy" &#124; "unknown"</code> | Public status property. |
+| `extractionMode` | property | <code>extractionMode?: "none" &#124; "provider" &#124; "custom" &#124; "native"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `idempotencyKey` | property | <code>idempotencyKey?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `input` | property | <code>input: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `inputType` | property | <code>inputType?: "structured" &#124; "text" &#124; "message" &#124; "artifact_ref" &#124; "event_ref"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryType` | property | <code>memoryType?: ManagedMemoryType</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `profileRef` | property | <code>profileRef: MemoryContractSpecRef</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `source` | property | <code>source: MemorySource</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `writeMode` | property | <code>writeMode?: "sync" &#124; "async"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryGetRequest`
+
+Memory Get Request interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryGetRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryGetRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    memoryId: string;
+    includeHistory?: boolean;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `includeHistory` | property | <code>includeHistory?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `memoryId` | property | <code>memoryId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryHistoryRequest`
+
+Memory History Request interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryHistoryRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryHistoryRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    memoryId: string;
+    pagination?: PaginationRequest;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `memoryId` | property | <code>memoryId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pagination` | property | <code>pagination?: PaginationRequest</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryIndexJobRef`
+
+Memory Index Job Ref interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryIndexJobRef } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryIndexJobRef {
+    id: string;
+    state: 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `id` | property | <code>id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `state` | property | <code>state: "completed" &#124; "failed" &#124; "processing" &#124; "pending" &#124; "partial"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryListRequest`
+
+Memory List Request interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryListRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryListRequest {
+    operationId: string;
+    principal: MemoryPrincipal;
+    scope: ManagedMemoryScope;
+    filter?: MemorySearchFilter;
+    pagination?: PaginationRequest;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `filter` | property | <code>filter?: MemorySearchFilter</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `operationId` | property | <code>operationId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `pagination` | property | <code>pagination?: PaginationRequest</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `principal` | property | <code>principal: MemoryPrincipal</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `scope` | property | <code>scope: ManagedMemoryScope</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryListResult`
+
+Memory List Result interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryListResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryListResult extends PaginationResult {
+    records: ManagedMemoryRecord[];
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `hasMore` | property | <code>hasMore: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `nextCursor` | property | <code>nextCursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `records` | property | <code>records: ManagedMemoryRecord&lt;unknown&gt;[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryManagementProvider`
+
+Memory Management Provider interface with 11 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryManagementProvider } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryManagementProvider {
+    readonly id: string;
+    capabilities(): Promise<import('./contracts').MemoryManagementCapabilities>;
+    add(request: MemoryAddRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult>;
+    search(request: ManagedMemorySearchRequest, signal?: AbortSignal): Promise<ManagedMemorySearchResult[]>;
+    get(request: MemoryGetRequest, signal?: AbortSignal): Promise<ManagedMemoryRecord | null>;
+    list(request: MemoryListRequest, signal?: AbortSignal): Promise<MemoryListResult>;
+    update(request: ManagedMemoryUpdateRequest, signal?: AbortSignal): Promise<ManagedMemoryWriteResult>;
+    delete(request: ManagedMemoryDeleteRequest, signal?: AbortSignal): Promise<ManagedMemoryDeleteResult>;
+    history?(request: MemoryHistoryRequest, signal?: AbortSignal): Promise<MemoryVersion[]>;
+    health(): Promise<ProviderHealth>;
+    close?(): Promise<void>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `add` | method | <code>add(request: MemoryAddRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `capabilities` | method | <code>capabilities(): Promise&lt;import("./contracts").MemoryManagementCapabilities&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `close` | method | <code>close?(): Promise&lt;void&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `delete` | method | <code>delete(request: ManagedMemoryDeleteRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryDeleteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `get` | method | <code>get(request: MemoryGetRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryRecord &#124; null&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `health` | method | <code>health(): Promise&lt;ProviderHealth&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `history` | method | <code>history?(request: MemoryHistoryRequest, signal?: AbortSignal): Promise&lt;MemoryVersion[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `id` | property | <code>readonly id: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `list` | method | <code>list(request: MemoryListRequest, signal?: AbortSignal): Promise&lt;MemoryListResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `search` | method | <code>search(request: ManagedMemorySearchRequest, signal?: AbortSignal): Promise&lt;ManagedMemorySearchResult[]&gt;</code> | Public method; parameters and return type are shown in the signature. |
+| `update` | method | <code>update(request: ManagedMemoryUpdateRequest, signal?: AbortSignal): Promise&lt;ManagedMemoryWriteResult&gt;</code> | Public method; parameters and return type are shown in the signature. |
+
+## `MemoryPatch`
+
+Memory Patch interface with 8 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryPatch } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryPatch {
+    content?: unknown;
+    canonicalText?: string;
+    summary?: string;
+    confidence?: number;
+    importance?: number;
+    tags?: string[];
+    status?: Exclude<MemoryStatus, 'deleted'>;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `canonicalText` | property | <code>canonicalText?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `confidence` | property | <code>confidence?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `content` | property | <code>content?: unknown</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `importance` | property | <code>importance?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status?: "failed" &#124; "invalidated" &#124; "deletion_pending" &#124; "active" &#124; "pending" &#124; "superseded" &#124; "dormant"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `summary` | property | <code>summary?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tags` | property | <code>tags?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryRejectedItem`
+
+Memory Rejected Item interface with 3 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryRejectedItem } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryRejectedItem {
+    itemId?: string;
+    reason: string;
+    error?: NormalizedMemoryError;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `error` | property | <code>error?: NormalizedMemoryError</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `itemId` | property | <code>itemId?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `reason` | property | <code>reason: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemorySearchFilter`
+
+Memory Search Filter interface with 18 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemorySearchFilter } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemorySearchFilter {
+    ids?: string[];
+    excludeIds?: string[];
+    statuses?: MemoryStatus[];
+    tagsAny?: string[];
+    tagsAll?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
+    updatedAfter?: string;
+    expiresAfter?: string;
+    confidenceGte?: number;
+    importanceGte?: number;
+    sourceTypes?: MemorySource['type'][];
+    entityIds?: string[];
+    visibility?: ManagedMemoryRecord['visibility'][];
+    verifiedOnly?: boolean;
+    conflictFreeOnly?: boolean;
+    canonicalKeys?: string[];
+    metadata?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `canonicalKeys` | property | <code>canonicalKeys?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `confidenceGte` | property | <code>confidenceGte?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `conflictFreeOnly` | property | <code>conflictFreeOnly?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdAfter` | property | <code>createdAfter?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `createdBefore` | property | <code>createdBefore?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `entityIds` | property | <code>entityIds?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `excludeIds` | property | <code>excludeIds?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `expiresAfter` | property | <code>expiresAfter?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `ids` | property | <code>ids?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `importanceGte` | property | <code>importanceGte?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `metadata` | property | <code>metadata?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `sourceTypes` | property | <code>sourceTypes?: ("human_review" &#124; "artifact" &#124; "system" &#124; "derived" &#124; "user_message" &#124; "assistant_message" &#124; "tool_result" &#124; "workflow_state" &#124; "import")[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `statuses` | property | <code>statuses?: MemoryStatus[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tagsAll` | property | <code>tagsAll?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `tagsAny` | property | <code>tagsAny?: string[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `updatedAfter` | property | <code>updatedAfter?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `verifiedOnly` | property | <code>verifiedOnly?: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `visibility` | property | <code>visibility?: ("workspace" &#124; "session" &#124; "private" &#124; "shared" &#124; "tenant")[]</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `MemoryVersion`
+
+Memory Version interface with 4 public fields or methods.
+
+- Kind: interface
+- Import: `import type { MemoryVersion } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface MemoryVersion {
+    memoryId: string;
+    versionId: string;
+    revision: number;
+    record: ManagedMemoryRecord;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `memoryId` | property | <code>memoryId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `record` | property | <code>record: ManagedMemoryRecord&lt;unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `revision` | property | <code>revision: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `versionId` | property | <code>versionId: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PaginationRequest`
+
+Pagination Request interface with 7 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PaginationRequest } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface PaginationRequest {
+    cursor?: string;
+    limit?: number;
+    maxPages?: number;
+    maxItems?: number;
+    maxBytes?: number;
+    maxDurationMs?: number;
+    maxCalls?: number;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `cursor` | property | <code>cursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `limit` | property | <code>limit?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxBytes` | property | <code>maxBytes?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxCalls` | property | <code>maxCalls?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxDurationMs` | property | <code>maxDurationMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxItems` | property | <code>maxItems?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `maxPages` | property | <code>maxPages?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `PaginationResult`
+
+Pagination Result interface with 2 public fields or methods.
+
+- Kind: interface
+- Import: `import type { PaginationResult } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface PaginationResult {
+    nextCursor?: string;
+    hasMore: boolean;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `hasMore` | property | <code>hasMore: boolean</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `nextCursor` | property | <code>nextCursor?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+
+## `ProviderHealth`
+
+Provider Health interface with 5 public fields or methods.
+
+- Kind: interface
+- Import: `import type { ProviderHealth } from '@codesoul-co/hypha-memory';`
+- Source module: [`operations`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/memory/src/operations.ts)
+
+### Declaration
+
+```text
+export interface ProviderHealth {
+    status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
+    checkedAt: string;
+    latencyMs?: number;
+    message?: string;
+    details?: Record<string, unknown>;
+}
+```
+
+### Contract members
+
+| Member | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `checkedAt` | property | <code>checkedAt: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `details` | property | <code>details?: Record&lt;string, unknown&gt;</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `latencyMs` | property | <code>latencyMs?: number</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `message` | property | <code>message?: string</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
+| `status` | property | <code>status: "healthy" &#124; "degraded" &#124; "unhealthy" &#124; "unknown"</code> | Public property; its type, readonly modifier and optionality are shown in the signature. |
