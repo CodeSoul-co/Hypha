@@ -35,6 +35,8 @@ full-system example are available at
 
 ## Guides
 
+- [Development Workflow](guides/development-workflow.md): short-lived branches, `dev` integration,
+  release gates, and the `dev` → `main` publication path.
 - [Releases and npm Packages](guides/releases.md): version alignment, package verification,
   publication boundaries, and the standalone consumer example.
 - [Upgrading Hypha](../UPGRADING.md): npm and source-release update, configuration migration,

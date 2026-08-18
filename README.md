@@ -556,6 +556,7 @@ NODE_ENV=production npm start
 Hypha v1.0.1 publishes 15 version-aligned npm libraries. Pin the exact same version across the
 dependency graph. The root workspace, bundled Server, CLI, and any package marked private remain
 source/deployment surfaces. See the [VitePress package reference](https://codesoul-co.github.io/Hypha/packages/),
+[Development Workflow](docs/guides/development-workflow.md),
 [Releases and npm Packages](docs/guides/releases.md), and [Upgrading](UPGRADING.md).
 
 | Package                                                                           | Responsibility                                                                                |

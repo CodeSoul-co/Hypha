@@ -2,10 +2,9 @@ name: Repository and platform gates
 
 on:
   pull_request:
-    branches: [dev, domain, cache-base, dev-domain-merge, dev-merge, main]
+    branches: [dev, main]
   push:
-    branches:
-      [tools, runtime, domain-tools, dev, domain, cache-base, dev-domain-merge, dev-merge, main]
+    branches: [dev, main]
   workflow_dispatch:
 
 permissions:

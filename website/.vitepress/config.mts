@@ -62,6 +62,7 @@ function englishTheme(): DefaultTheme.Config {
           text: 'Build with Hypha',
           items: [
             { text: 'Get started', link: '/guide/getting-started' },
+            { text: 'Development workflow', link: '/guide/development-workflow' },
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Feature map', link: '/guide/capability-map' },
             { text: 'Control an FSM', link: '/guide/fsm-control' },
@@ -100,6 +101,7 @@ function chineseTheme(): DefaultTheme.Config {
           text: '使用 Hypha 搭建系统',
           items: [
             { text: '快速开始', link: '/zh/guide/getting-started' },
+            { text: '开发与发布流程', link: '/zh/guide/development-workflow' },
             { text: '系统架构', link: '/zh/guide/architecture' },
             { text: '逐功能地图', link: '/zh/guide/capability-map' },
             { text: '控制 FSM', link: '/zh/guide/fsm-control' },
