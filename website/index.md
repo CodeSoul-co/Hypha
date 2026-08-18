@@ -16,6 +16,9 @@ hero:
       text: Explore packages
       link: /packages/
     - theme: alt
+      text: Complete API
+      link: /api/
+    - theme: alt
       text: View v1.0.1
       link: https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.1
 
@@ -41,8 +44,8 @@ features:
     details: Start with SQLite, files and deterministic adapters, then replace providers without moving product contracts.
     link: /packages/adapters-local
   - icon: '06'
-    title: One complete example
-    details: Tour all 15 packages, compile a Domain Pack, run a custom FSM and submit durable commands.
+    title: Runnable feature examples
+    details: Run 7 isolated feature entries, tour all 15 packages, compile a Domain Pack and submit durable commands.
     link: /guide/examples
 ---
 
@@ -55,4 +58,4 @@ features:
 
 ## A framework boundary, not an application template
 
-Hypha supplies contracts and execution boundaries. Your application supplies the Domain Pack, prompts, workflows, capability selections, policies and deployment overlay. Start with the [architecture map](/guide/architecture), then choose only the [packages](/packages/) needed by your composition.
+Hypha supplies contracts and execution boundaries. Your application supplies the Domain Pack, prompts, workflows, capability selections, policies and deployment overlay. Start with the [feature map](/guide/capability-map), choose the [packages](/packages/) needed by your composition, then use the [complete API](/api/) for exact modules and symbols.

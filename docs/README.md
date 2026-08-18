@@ -2,12 +2,16 @@
 
 This directory contains public documentation for using hypha APIs, specs, runtime conventions, and extension points. It intentionally describes stable contracts rather than internal planning notes.
 
-The published v1.0.0 user guide, all-package atlas, FSM walkthrough, and full-system example are
-available at [codesoul-co.github.io/Hypha](https://codesoul-co.github.io/Hypha/). The project website
-is [hypha.code-soul.com](https://hypha.code-soul.com/).
+The published v1.0.1 user guide, feature map, complete generated API reference, FSM walkthrough, and
+full-system example are available at
+[codesoul-co.github.io/Hypha](https://codesoul-co.github.io/Hypha/). The project website is
+[hypha.code-soul.com](https://hypha.code-soul.com/).
 
 ## Start Here
 
+- [Feature Map](https://codesoul-co.github.io/Hypha/guide/capability-map): end-to-end execution stages mapped to packages, modules, principal classes/functions, and isolated examples.
+- [Complete API Reference](https://codesoul-co.github.io/Hypha/api/): every public package export grouped by source module, including signatures and public class/interface members.
+- [Runnable Examples](https://codesoul-co.github.io/Hypha/guide/examples): seven isolated feature entries, a 15-package tour, DomainPack compilation, Server Run submission, and custom FSM control.
 - [Architecture Reference](reference/architecture.md): package responsibilities, harness semantics, runtime boundaries, and extension rules.
 - [Runtime Model](reference/runtime-model.md): DomainPack, Session, Run, Event, durable orchestration, FSM, replay, audit, regression, and concurrency conventions.
 - [FSM Anomaly Recovery](architecture/fsm-recovery.md): cross-module supervision, evidence-based convergence, bounded recovery states, cache knowledge, and module failure matrix.

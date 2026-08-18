@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "compile-agent": "npm run build && node dist/compile-agent.js",
+    "feature": "npm run build && node dist/run-feature.js",
     "tour": "npm run build && node dist/package-tour.js",
     "test": "npm run build && node dist/contract.test.js",
     "run": "npm run build && node dist/run-agent.js",

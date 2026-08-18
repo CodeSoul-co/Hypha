@@ -6,17 +6,19 @@ it does not edit framework source.
 
 ## Parts
 
-| File                     | Product responsibility                                                                                                                    |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent/domain-pack.yaml` | Task/input, output contract, workflow, Tool/Skill allow-lists, Memory/reasoning profiles, policy, evaluation, regression, and deployment. |
-| `agent/prompt.json`      | Versioned Agent Prompt registered through the Runtime API.                                                                                |
-| `agent/skill.md`         | Progressively loaded Skill instructions and declared trust metadata.                                                                      |
-| `agent/hypha.user.yaml`  | Product-owned Server configuration overlay.                                                                                               |
-| `src/agent.ts`           | Loads and validates the DomainPack, compiles its custom workflow FSM, and applies the Agent patch.                                        |
-| `src/package-tour.ts`    | Imports all 15 public packages and exercises one representative contract or runtime boundary from each.                                   |
-| `src/contract.test.ts`   | Proves deterministic compilation, Harness system output, output contract, and selected capabilities.                                      |
-| `src/run-agent.ts`       | Registers Prompt/Skill and submits a durable Session start-run command over HTTP.                                                         |
-| `src/run-fsm.ts`         | Starts the compiled custom FSM, inspects its revision, and applies one governed owner transition.                                         |
+| File                     | Product responsibility                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent/domain-pack.yaml` | Task/input, output contract, workflow, Tool/Skill allow-lists, Memory/reasoning profiles, policy, evaluation, regression, and deployment.         |
+| `agent/prompt.json`      | Versioned Agent Prompt registered through the Runtime API.                                                                                        |
+| `agent/skill.md`         | Progressively loaded Skill instructions and declared trust metadata.                                                                              |
+| `agent/hypha.user.yaml`  | Product-owned Server configuration overlay.                                                                                                       |
+| `src/agent.ts`           | Loads and validates the DomainPack, compiles its custom workflow FSM, and applies the Agent patch.                                                |
+| `src/features/*.ts`      | Seven isolated examples covering contracts/storage, FSM, inference/models, capabilities, composition, Events/Harness/adapters, and cache/testing. |
+| `src/run-feature.ts`     | Selects and runs one feature example by name.                                                                                                     |
+| `src/package-tour.ts`    | Composes all feature examples and the release Agent into one 15-package smoke run.                                                                |
+| `src/contract.test.ts`   | Proves deterministic compilation and asserts real output from every isolated feature example.                                                     |
+| `src/run-agent.ts`       | Registers Prompt/Skill and submits a durable Session start-run command over HTTP.                                                                 |
+| `src/run-fsm.ts`         | Starts the compiled custom FSM, inspects its revision, and applies one governed owner transition.                                                 |
 
 The Tool entry is a contract and permission declaration. The concrete `search` adapter is
 registered by trusted Server composition; DomainPack YAML does not gain execution authority merely
@@ -52,6 +54,7 @@ release, then install the matching packages:
 
 ```bash
 npm install
+npm run feature -- fsm
 npm run tour
 npm run compile-agent
 npm test
@@ -61,7 +64,44 @@ All `@codesoul-co/hypha-*` dependencies should remain on one release line. v1.0.
 published release represented by this example. During Hypha repository development, the root
 command `npm run typecheck:release-example` checks the same source against workspace packages.
 
-`npm run tour` prints a JSON inventory only after all 15 representative boundaries succeed.
+## Run one feature at a time
+
+The feature runner keeps each example small enough to copy into an application without importing
+the full system:
+
+| Command                                      | Source                                | Packages and behavior                                                 |
+| -------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------- |
+| `npm run feature -- core-storage`            | `features/core-storage.ts`            | Validate a system spec and create a SQLite storage topology           |
+| `npm run feature -- fsm`                     | `features/fsm.ts`                     | Parse a process, analyze topology and create an initial Snapshot      |
+| `npm run feature -- inference-models`        | `features/inference-models.ts`        | Register deterministic providers, route a model and execute inference |
+| `npm run feature -- capabilities`            | `features/capabilities.ts`            | Register a Tool and Skill and validate an MCP allow-list              |
+| `npm run feature -- domain-kernel-memory`    | `features/domain-kernel-memory.ts`    | Validate Domain, ReAct Agent and Memory composition contracts         |
+| `npm run feature -- events-harness-adapters` | `features/events-harness-adapters.ts` | Record an Event, project a Session and create local profiles          |
+| `npm run feature -- cache-testing`           | `features/cache-testing.ts`           | Write/read a deterministic cache entry and assert a state path        |
+
+For example:
+
+```bash
+npm run feature -- fsm
+```
+
+```json
+{
+  "feature": "fsm",
+  "result": {
+    "processId": "fsm.react.default",
+    "initialState": "Idle",
+    "reachableStates": ["Idle", "Reasoning", "HumanReview", "Completed", "Failed"],
+    "unreachableStates": [],
+    "terminalStates": ["Completed", "Failed"]
+  }
+}
+```
+
+`npm run tour` runs all seven entries and prints a JSON inventory only after all 15 representative
+package boundaries succeed. `npm test` asserts the important values instead of only checking that
+the imports execute.
+
 `npm run compile-agent` then prints two intentionally separate processes:
 
 - `reactHarnessFsm` is framework-owned and protects ReAct lifecycle, policy, effects, verification,
