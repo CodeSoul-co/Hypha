@@ -125,14 +125,14 @@ The latest three-way comparison was run against Hypha `main@ef33263` with one tr
 (385 tasks total). The base model was `deepseek-v4-flash`. Hypha is the framework result and
 Direct is the direct model-call baseline. Neither arm reported a system error.
 
-| Benchmark | Tasks | Hypha | Direct |
-| --------- | ----: | ----: | ------: |
-| Mock | 10 | 0.800 (8/10) | 0.800 (8/10) |
-| Airline | 50 | 0.880 (44/50) | 0.900 (45/50) |
-| Retail | 114 | 0.912 (104/114) | 0.895 (102/114) |
-| Telecom | 114 | 0.605 (69/114) | 0.588 (67/114) |
-| Banking knowledge | 97 | 0.206 (20/97) | 0.196 (19/97) |
-| **Total** | **385** | **0.636 (245/385)** | **0.626 (241/385)** |
+| Benchmark         |   Tasks |               Hypha |              Direct |
+| ----------------- | ------: | ------------------: | ------------------: |
+| Mock              |      10 |        0.800 (8/10) |        0.800 (8/10) |
+| Airline           |      50 |       0.880 (44/50) |       0.900 (45/50) |
+| Retail            |     114 |     0.912 (104/114) |     0.895 (102/114) |
+| Telecom           |     114 |      0.605 (69/114) |      0.588 (67/114) |
+| Banking knowledge |      97 |       0.206 (20/97) |       0.196 (19/97) |
+| **Total**         | **385** | **0.636 (245/385)** | **0.626 (241/385)** |
 
 ## Product model
 
@@ -574,7 +574,10 @@ source/deployment surfaces. See the [VitePress package reference](https://codeso
 
 ## Documentation
 
-- [Bilingual VitePress guide and complete package reference](https://codesoul-co.github.io/Hypha/)
+- [Bilingual VitePress guide](https://codesoul-co.github.io/Hypha/)
+- [Feature-by-feature map](https://codesoul-co.github.io/Hypha/guide/capability-map)
+- [Complete module/class/function API](https://codesoul-co.github.io/Hypha/api/)
+- [Seven isolated feature examples and full-system example](https://codesoul-co.github.io/Hypha/guide/examples)
 - [Official website](https://hypha.code-soul.com/)
 - [Documentation index](docs/README.md)
 - [Architecture](docs/reference/architecture.md)

@@ -119,14 +119,14 @@ Invalidation 与 Bypass 都属于 Runtime 控制，而不是隐藏的实现细�
 最新三方对比基于 Hypha `main@ef33263`，每个任务运行一次，共 385 个任务。Base model 为
 `deepseek-v4-flash`。Hypha 列为框架结果，Direct 列为直接模型调用基线；两组均未报告系统错误。
 
-| Benchmark | 任务数 | Hypha | Direct |
-| --------- | ----: | ----: | ------: |
-| Mock | 10 | 0.800（8/10） | 0.800（8/10） |
-| Airline | 50 | 0.880（44/50） | 0.900（45/50） |
-| Retail | 114 | 0.912（104/114） | 0.895（102/114） |
-| Telecom | 114 | 0.605（69/114） | 0.588（67/114） |
-| Banking knowledge | 97 | 0.206（20/97） | 0.196（19/97） |
-| **合计** | **385** | **0.636（245/385）** | **0.626（241/385）** |
+| Benchmark         |  任务数 |                Hypha |               Direct |
+| ----------------- | ------: | -------------------: | -------------------: |
+| Mock              |      10 |        0.800（8/10） |        0.800（8/10） |
+| Airline           |      50 |       0.880（44/50） |       0.900（45/50） |
+| Retail            |     114 |     0.912（104/114） |     0.895（102/114） |
+| Telecom           |     114 |      0.605（69/114） |      0.588（67/114） |
+| Banking knowledge |      97 |       0.206（20/97） |       0.196（19/97） |
+| **合计**          | **385** | **0.636（245/385）** | **0.626（241/385）** |
 
 ## 产品模型
 
@@ -549,7 +549,10 @@ Hypha v1.0.1 已发布 15 个版本对齐的 npm Library；应用应在整个依
 
 ## 文档
 
-- [中英双语 VitePress 文档与完整 Package 参考](https://codesoul-co.github.io/Hypha/zh/)
+- [中英双语 VitePress 文档](https://codesoul-co.github.io/Hypha/zh/)
+- [逐功能地图](https://codesoul-co.github.io/Hypha/zh/guide/capability-map)
+- [逐模块/类/函数完整 API](https://codesoul-co.github.io/Hypha/zh/api/)
+- [7 个独立功能示例与完整系统示例](https://codesoul-co.github.io/Hypha/zh/guide/examples)
 - [官方网站](https://hypha.code-soul.com/)
 - [文档索引](docs/README.md)
 - [系统架构](docs/reference/architecture.md)

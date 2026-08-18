@@ -16,6 +16,9 @@ hero:
       text: 查看模块
       link: /zh/packages/
     - theme: alt
+      text: 完整 API
+      link: /zh/api/
+    - theme: alt
       text: 查看 v1.0.1
       link: https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.1
 
@@ -41,8 +44,8 @@ features:
     details: 从 SQLite、文件和确定性适配器开始，之后可替换 Provider 而不迁移产品契约。
     link: /zh/packages/adapters-local
   - icon: '06'
-    title: 完整可运行示例
-    details: 覆盖全部 15 个包，编译 Domain Pack、运行自定义 FSM 并提交持久化命令。
+    title: 可运行功能示例
+    details: 运行 7 个独立功能入口，覆盖全部 15 个包，编译 Domain Pack 并提交持久化命令。
     link: /zh/guide/examples
 ---
 
@@ -55,4 +58,4 @@ features:
 
 ## 框架边界，而不是应用模板
 
-Hypha 提供契约与执行边界；应用提供 Domain Pack、Prompt、Workflow、能力选择、Policy 与部署覆盖配置。建议先阅读[架构图](/zh/guide/architecture)，再按组合需要选择[模块](/zh/packages/)。
+Hypha 提供契约与执行边界；应用提供 Domain Pack、Prompt、Workflow、能力选择、Policy 与部署覆盖配置。建议先阅读[逐功能地图](/zh/guide/capability-map)，按需选择[模块](/zh/packages/)，再从[完整 API](/zh/api/)查询具体源码模块与 Symbol。

@@ -1,0 +1,28 @@
+# `@codesoul-co/hypha-core` / `contracts/runtime-activity-schemas`
+
+- Package index: [`@codesoul-co/hypha-core`](/api/core)
+- Package guide: [learning and composition guide](/packages/core)
+- Source: [`packages/core/src/contracts/runtime-activity-schemas.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/contracts/runtime-activity-schemas.ts)
+- Exports: **17**
+
+## Public exports
+
+| Symbol | Kind | Signature | Description |
+| --- | --- | --- | --- |
+| `runtimeActivityContractDefinitions` | constant | <code>const runtimeActivityContractDefinitions: readonly [SpecSchemaDefinition&lt;RuntimeActivityRequest&lt;RuntimeJsonValue&gt;&gt;, SpecSchemaDefinition&lt;RuntimeActivityDescriptor&gt;]</code> | runtime Activity Contract Definitions constant exported by the `contracts/runtime-activity-schemas` module. |
+| `runtimeActivityContractJsonSchemas` | constant | <code>const runtimeActivityContractJsonSchemas: Record&lt;string, JsonSchema&gt;</code> | runtime Activity Contract Json Schemas constant exported by the `contracts/runtime-activity-schemas` module. |
+| `runtimeActivityDescriptorDefinition` | constant | <code>const runtimeActivityDescriptorDefinition: SpecSchemaDefinition&lt;RuntimeActivityDescriptor&gt;</code> | runtime Activity Descriptor Definition constant exported by the `contracts/runtime-activity-schemas` module. |
+| `runtimeActivityDescriptorExample` | constant | <code>const runtimeActivityDescriptorExample: RuntimeActivityDescriptor</code> | Valid example value for runtime Activity Descriptor. |
+| `runtimeActivityDescriptorJsonSchema` | constant | <code>const runtimeActivityDescriptorJsonSchema: JsonSchema</code> | JSON Schema for runtime Activity Descriptor. |
+| `runtimeActivityDescriptorSchema` | constant | <code>const runtimeActivityDescriptorSchema: z.ZodObject&lt;{ version: z.ZodLiteral&lt;"1.0.0"&gt;; activityId: z.ZodString; activityKind: z.ZodEnum&lt;["react_quantum", "tool", "memory", "execution", "mcp", "policy"]&gt;; runId: z.ZodString; stateId: z.ZodString; stateAttempt: z.ZodNumber; operationId: z.ZodString; inputRef: z.ZodString; inputHash: z.ZodString; providerRef: z.ZodOptional&lt;z.ZodString&gt;; providerRevision: z.ZodOptional&lt;...</code> | Runtime schema for runtime Activity Descriptor. |
+| `runtimeActivityInvocationSchema` | constant | <code>const runtimeActivityInvocationSchema: z.ZodObject&lt;{ activityId: z.ZodString; operationId: z.ZodString; activityType: z.ZodEnum&lt;["tool", "memory", "model", "execution", "custom"]&gt;; target: z.ZodString; input: z.ZodType&lt;RuntimeJsonValue, z.ZodTypeDef, RuntimeJsonValue&gt;; scope: z.ZodObject&lt;{ tenantId: z.ZodOptional&lt;z.ZodString&gt;; userId: z.ZodString; workspaceId: z.ZodOptional&lt;z.ZodString&gt;; sessionId: z.ZodString; ru...</code> | Runtime schema for runtime Activity Invocation. |
+| `runtimeActivityObservationJsonSchema` | constant | <code>const runtimeActivityObservationJsonSchema: JsonSchema</code> | JSON Schema for runtime Activity Observation. |
+| `runtimeActivityObservationSchema` | constant | <code>const runtimeActivityObservationSchema: z.ZodEffects&lt;z.ZodObject&lt;{ activityId: z.ZodString; status: z.ZodEnum&lt;["completed", "failed", "waiting", "cancelled"]&gt;; eventIds: z.ZodArray&lt;z.ZodString, "many"&gt;; output: z.ZodOptional&lt;z.ZodType&lt;RuntimeJsonValue, z.ZodTypeDef, RuntimeJsonValue&gt;&gt;; artifactRefs: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; retryable: z.ZodOptional&lt;z.ZodBoolean&gt;; error: z.ZodOptional&lt;z.ZodOb...</code> | Runtime schema for runtime Activity Observation. |
+| `runtimeActivityRequestDefinition` | constant | <code>const runtimeActivityRequestDefinition: SpecSchemaDefinition&lt;RuntimeActivityRequest&lt;RuntimeJsonValue&gt;&gt;</code> | runtime Activity Request Definition constant exported by the `contracts/runtime-activity-schemas` module. |
+| `runtimeActivityRequestExample` | constant | <code>const runtimeActivityRequestExample: RuntimeActivityRequest&lt;RuntimeJsonValue&gt;</code> | Valid example value for runtime Activity Request. |
+| `runtimeActivityRequestJsonSchema` | constant | <code>const runtimeActivityRequestJsonSchema: JsonSchema</code> | JSON Schema for runtime Activity Request. |
+| `runtimeActivityRequestSchema` | constant | <code>const runtimeActivityRequestSchema: z.ZodObject&lt;{ target: z.ZodString; input: z.ZodType&lt;RuntimeJsonValue, z.ZodTypeDef, RuntimeJsonValue&gt;; options: z.ZodOptional&lt;z.ZodObject&lt;{ effect: z.ZodOptional&lt;z.ZodEnum&lt;["pure", "idempotent", "external_effect", "irreversible"]&gt;&gt;; timeoutMs: z.ZodOptional&lt;z.ZodNumber&gt;; retry: z.ZodOptional&lt;z.ZodEffects&lt;z.ZodObject&lt;{ maxAttempts: z.ZodNumber; initialDelayMs: z.ZodOptional&lt;z.Zod...</code> | Runtime schema for runtime Activity Request. |
+| `validateRuntimeActivityDescriptor` | function | <code>validateRuntimeActivityDescriptor(input: unknown): RuntimeActivityDescriptor</code> | Validates Runtime Activity Descriptor at this module boundary. |
+| `validateRuntimeActivityInvocation` | function | <code>validateRuntimeActivityInvocation(input: unknown): RuntimeActivityInvocation</code> | Validates Runtime Activity Invocation at this module boundary. |
+| `validateRuntimeActivityObservation` | function | <code>validateRuntimeActivityObservation(input: unknown): RuntimeActivityObservation</code> | Validates Runtime Activity Observation at this module boundary. |
+| `validateRuntimeActivityRequest` | function | <code>validateRuntimeActivityRequest(input: unknown): RuntimeActivityRequest</code> | Validates Runtime Activity Request at this module boundary. |

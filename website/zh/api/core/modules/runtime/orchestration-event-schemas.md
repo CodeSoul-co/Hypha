@@ -1,0 +1,25 @@
+# `@codesoul-co/hypha-core` / `modules/runtime/orchestration-event-schemas`
+
+- 包索引: [`@codesoul-co/hypha-core`](/zh/api/core)
+- 模块指南: [学习与组合说明](/zh/packages/core)
+- 源码: [`packages/core/src/modules/runtime/orchestration-event-schemas.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/runtime/orchestration-event-schemas.ts)
+- 导出数: **14**
+
+## 公共导出
+
+| Symbol | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `RUNTIME_CANONICAL_EVENT_TYPES` | 常量 | <code>const RUNTIME_CANONICAL_EVENT_TYPES: readonly RuntimeCanonicalEventType[]</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 RUNTIME CANONICAL EVENT TYPES 常量。 |
+| `RUNTIME_ORCHESTRATION_EVENT_SCHEMA_VERSION` | 常量 | <code>const RUNTIME_ORCHESTRATION_EVENT_SCHEMA_VERSION: "1.0.0"</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 RUNTIME ORCHESTRATION EVENT SCHEMA VERSION 常量。 |
+| `RUNTIME_ORCHESTRATION_EVENT_TYPES` | 常量 | <code>const RUNTIME_ORCHESTRATION_EVENT_TYPES: readonly ["run.created", "run.started", "run.resume.requested", "run.resumed", "run.cancel.requested", "run.cancelling", "run.waiting_human", "run.waiting_signal", "run.waiting_timer", "run.paused", "run.completed", "run.failed", "run.cancelled", "runtime.wait.created", "runtime.wait.resolved", "runtime.signal.received", "runtime.timer.created", "runtime.timer.fired", "runt...</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 RUNTIME ORCHESTRATION EVENT TYPES 常量。 |
+| `RUNTIME_RUN_MANAGER_EVENT_TYPES` | 常量 | <code>const RUNTIME_RUN_MANAGER_EVENT_TYPES: readonly ["session.created", "run.created", "run.started", "run.waiting_human", "run.completed", "run.failed", "run.cancelled", "fsm.transition.accepted", "fsm.state.entered", "human.review.requested", "human.review.approved", "human.review.rejected", "context.build.started", "context.build.completed", "context.compacted", "skill.selected", "skill.loaded", "skill.completed", ...</code> | Event families emitted directly by the Harness RunManager. This list is the migration boundary for the canonical Server RunManager. Module-owned events such as Tool, Model, and Memory observations are not included and must be written through their owning event ports. |
+| `RUNTIME_RUN_MANAGER_MIGRATION_EVENT_TYPES` | 常量 | <code>const RUNTIME_RUN_MANAGER_MIGRATION_EVENT_TYPES: readonly ("session.created" &#124; "run.created" &#124; "run.started" &#124; "run.waiting_human" &#124; "run.completed" &#124; "run.failed" &#124; "run.cancelled" &#124; "fsm.transition.accepted" &#124; "fsm.state.entered" &#124; "thinking.started" &#124; "thinking.completed" &#124; "agent.deliberation.started" &#124; "agent.deliberation.completed" &#124; "reasoning.decision.recorded" &#124; "react.step.completed" &#124; "react.continuatio...</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 RUNTIME RUN MANAGER MIGRATION EVENT TYPES 常量。 |
+| `RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES` | 常量 | <code>const RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES: readonly ["run.created", "run.started", "run.resume.requested", "run.resumed", "run.cancel.requested", "run.cancelling", "run.waiting_human", "run.waiting_signal", "run.waiting_timer", "run.paused", "run.completed", "run.failed", "run.cancelled", "runtime.wait.created", "runtime.wait.resolved", "runtime.signal.received", "runtime.timer.created", "runtime.timer.fired", "...</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 RUNTIME SERVICE EMITTABLE EVENT TYPES 常量。 |
+| `runtimeEventSchemaDefinitions` | 常量 | <code>const runtimeEventSchemaDefinitions: readonly EventSchemaDefinition[]</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 runtime Event Schema Definitions 常量。 |
+| `runtimeOrchestrationEventSchemaDefinitions` | 常量 | <code>const runtimeOrchestrationEventSchemaDefinitions: readonly EventSchemaDefinition[]</code> | 由 `modules/runtime/orchestration-event-schemas` 模块导出的 runtime Orchestration Event Schema Definitions 常量。 |
+| `assertRuntimeEventCatalogComplete` | 函数 | <code>assertRuntimeEventCatalogComplete(definitions?: readonly EventSchemaDefinition[], requiredEventTypes?: readonly RuntimeCanonicalEventType[]): void</code> | 断言 Runtime Event Catalog Complete。 |
+| `registerRuntimeOrchestrationEventSchemas` | 函数 | <code>registerRuntimeOrchestrationEventSchemas(registry: EventSchemaRegistry): Promise&lt;void&gt;</code> | 注册 Runtime Orchestration Event Schemas。 |
+| `RuntimeCanonicalEventType` | 类型 | <code>type RuntimeCanonicalEventType = RuntimeServiceEmittableEventType &#124; RuntimeRunManagerEventType</code> | Runtime Canonical Event Type 的公共类型别名。 |
+| `RuntimeOrchestrationEventType` | 类型 | <code>type RuntimeOrchestrationEventType = (typeof RUNTIME_ORCHESTRATION_EVENT_TYPES)[number]</code> | Runtime Orchestration Event Type 的公共类型别名。 |
+| `RuntimeRunManagerEventType` | 类型 | <code>type RuntimeRunManagerEventType = (typeof RUNTIME_RUN_MANAGER_EVENT_TYPES)[number]</code> | Runtime Run Manager Event Type 的公共类型别名。 |
+| `RuntimeServiceEmittableEventType` | 类型 | <code>type RuntimeServiceEmittableEventType = (typeof RUNTIME_SERVICE_EMITTABLE_EVENT_TYPES)[number]</code> | Runtime Service Emittable Event Type 的公共类型别名。 |

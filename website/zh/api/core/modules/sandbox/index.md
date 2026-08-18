@@ -1,0 +1,34 @@
+# `@codesoul-co/hypha-core` / `modules/sandbox/index`
+
+- 包索引: [`@codesoul-co/hypha-core`](/zh/api/core)
+- 模块指南: [学习与组合说明](/zh/packages/core)
+- 源码: [`packages/core/src/modules/sandbox/index.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/packages/core/src/modules/sandbox/index.ts)
+- 导出数: **23**
+
+## 公共导出
+
+| Symbol | 种类 | 签名 | 说明 |
+| --- | --- | --- | --- |
+| `sandboxCleanupRequestSchema` | 常量 | <code>const sandboxCleanupRequestSchema: z.ZodObject&lt;{ operationId: z.ZodString; sandboxId: z.ZodString; principal: z.ZodObject&lt;{ principalId: z.ZodString; type: z.ZodEnum&lt;["user", "agent", "service", "system"]&gt;; tenantId: z.ZodOptional&lt;z.ZodString&gt;; userId: z.ZodOptional&lt;z.ZodString&gt;; agentId: z.ZodOptional&lt;z.ZodString&gt;; roles: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; permissionScopes: z.ZodArray&lt;z.ZodString, "m...</code> | sandbox Cleanup Request 的运行时 Schema。 |
+| `sandboxCreateRequestExample` | 常量 | <code>const sandboxCreateRequestExample: SandboxCreateRequest</code> | sandbox Create Request 的有效示例值。 |
+| `sandboxCreateRequestSchema` | 常量 | <code>const sandboxCreateRequestSchema: z.ZodEffects&lt;z.ZodObject&lt;{ operationId: z.ZodString; principal: z.ZodObject&lt;{ principalId: z.ZodString; type: z.ZodEnum&lt;["user", "agent", "service", "system"]&gt;; tenantId: z.ZodOptional&lt;z.ZodString&gt;; userId: z.ZodOptional&lt;z.ZodString&gt;; agentId: z.ZodOptional&lt;z.ZodString&gt;; roles: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; permissionScopes: z.ZodArray&lt;z.ZodString, "many"&gt;; metad...</code> | sandbox Create Request 的运行时 Schema。 |
+| `sandboxLifecycleJsonSchemas` | 常量 | <code>const sandboxLifecycleJsonSchemas: Record&lt;string, JsonSchema&gt;</code> | 由 `modules/sandbox/index` 模块导出的 sandbox Lifecycle Json Schemas 常量。 |
+| `sandboxProviderCapabilitiesExample` | 常量 | <code>const sandboxProviderCapabilitiesExample: SandboxProviderCapabilities</code> | sandbox Provider Capabilities 的有效示例值。 |
+| `sandboxProviderCapabilitiesJsonSchema` | 常量 | <code>const sandboxProviderCapabilitiesJsonSchema: JsonSchema</code> | sandbox Provider Capabilities 的 JSON Schema。 |
+| `sandboxProviderCapabilitiesSchema` | 常量 | <code>const sandboxProviderCapabilitiesSchema: z.ZodObject&lt;{ processIsolation: z.ZodBoolean; filesystemIsolation: z.ZodBoolean; networkIsolation: z.ZodBoolean; cpuLimits: z.ZodBoolean; memoryLimits: z.ZodBoolean; diskLimits: z.ZodBoolean; pidsLimit: z.ZodBoolean; cancellation: z.ZodBoolean; processTreeKill: z.ZodBoolean; snapshots: z.ZodBoolean; imageDigestPinning: z.ZodBoolean; remoteExecution: z.ZodBoolean; }, "strict...</code> | sandbox Provider Capabilities 的运行时 Schema。 |
+| `sandboxRecordExample` | 常量 | <code>const sandboxRecordExample: SandboxRecord</code> | sandbox Record 的有效示例值。 |
+| `sandboxRecordJsonSchema` | 常量 | <code>const sandboxRecordJsonSchema: JsonSchema</code> | sandbox Record 的 JSON Schema。 |
+| `sandboxRecordSchema` | 常量 | <code>const sandboxRecordSchema: z.ZodEffects&lt;z.ZodObject&lt;{ id: z.ZodString; revision: z.ZodNumber; providerId: z.ZodString; environmentRef: z.ZodObject&lt;{ id: z.ZodString; version: z.ZodOptional&lt;z.ZodString&gt;; revision: z.ZodOptional&lt;z.ZodString&gt;; }, "strip", z.ZodTypeAny, { id: string; version?: string &#124; undefined; revision?: string &#124; undefined; }, { id: string; version?: string &#124; undefined; revision?: string &#124; undefine...</code> | sandbox Record 的运行时 Schema。 |
+| `sandboxStartRequestSchema` | 常量 | <code>const sandboxStartRequestSchema: z.ZodObject&lt;{ operationId: z.ZodString; sandboxId: z.ZodString; principal: z.ZodObject&lt;{ principalId: z.ZodString; type: z.ZodEnum&lt;["user", "agent", "service", "system"]&gt;; tenantId: z.ZodOptional&lt;z.ZodString&gt;; userId: z.ZodOptional&lt;z.ZodString&gt;; agentId: z.ZodOptional&lt;z.ZodString&gt;; roles: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; permissionScopes: z.ZodArray&lt;z.ZodString, "man...</code> | sandbox Start Request 的运行时 Schema。 |
+| `sandboxStatusRequestSchema` | 常量 | <code>const sandboxStatusRequestSchema: z.ZodObject&lt;{ sandboxId: z.ZodString; principal: z.ZodObject&lt;{ principalId: z.ZodString; type: z.ZodEnum&lt;["user", "agent", "service", "system"]&gt;; tenantId: z.ZodOptional&lt;z.ZodString&gt;; userId: z.ZodOptional&lt;z.ZodString&gt;; agentId: z.ZodOptional&lt;z.ZodString&gt;; roles: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; permissionScopes: z.ZodArray&lt;z.ZodString, "many"&gt;; metadata: z.ZodOptio...</code> | sandbox Status Request 的运行时 Schema。 |
+| `sandboxStatusSchema` | 常量 | <code>const sandboxStatusSchema: z.ZodEnum&lt;["creating", "created", "starting", "ready", "busy", "stopping", "stopped", "terminating", "terminated", "cleaning", "cleaned", "failed"]&gt;</code> | sandbox Status 的运行时 Schema。 |
+| `sandboxStatusTransitions` | 常量 | <code>const sandboxStatusTransitions: Readonly&lt;Record&lt;SandboxStatus, readonly SandboxStatus[]&gt;&gt;</code> | 由 `modules/sandbox/index` 模块导出的 sandbox Status Transitions 常量。 |
+| `sandboxTerminateRequestSchema` | 常量 | <code>const sandboxTerminateRequestSchema: z.ZodObject&lt;{ operationId: z.ZodString; sandboxId: z.ZodString; principal: z.ZodObject&lt;{ principalId: z.ZodString; type: z.ZodEnum&lt;["user", "agent", "service", "system"]&gt;; tenantId: z.ZodOptional&lt;z.ZodString&gt;; userId: z.ZodOptional&lt;z.ZodString&gt;; agentId: z.ZodOptional&lt;z.ZodString&gt;; roles: z.ZodOptional&lt;z.ZodArray&lt;z.ZodString, "many"&gt;&gt;; permissionScopes: z.ZodArray&lt;z.ZodString, ...</code> | sandbox Terminate Request 的运行时 Schema。 |
+| `canTransitionSandboxStatus` | 函数 | <code>canTransitionSandboxStatus(from: SandboxStatus, to: SandboxStatus): boolean</code> | 判断能否 Transition Sandbox Status。 |
+| `validateSandboxCleanupRequest` | 函数 | <code>validateSandboxCleanupRequest(input: unknown): SandboxCleanupRequest</code> | 校验 Sandbox Cleanup Request。 |
+| `validateSandboxCreateRequest` | 函数 | <code>validateSandboxCreateRequest(input: unknown): SandboxCreateRequest</code> | 校验 Sandbox Create Request。 |
+| `validateSandboxProviderCapabilities` | 函数 | <code>validateSandboxProviderCapabilities(input: unknown): SandboxProviderCapabilities</code> | 校验 Sandbox Provider Capabilities。 |
+| `validateSandboxRecord` | 函数 | <code>validateSandboxRecord(input: unknown): SandboxRecord</code> | 校验 Sandbox Record。 |
+| `validateSandboxStartRequest` | 函数 | <code>validateSandboxStartRequest(input: unknown): SandboxStartRequest</code> | 校验 Sandbox Start Request。 |
+| `validateSandboxStatusRequest` | 函数 | <code>validateSandboxStatusRequest(input: unknown): SandboxStatusRequest</code> | 校验 Sandbox Status Request。 |
+| `validateSandboxTerminateRequest` | 函数 | <code>validateSandboxTerminateRequest(input: unknown): SandboxTerminateRequest</code> | 校验 Sandbox Terminate Request。 |

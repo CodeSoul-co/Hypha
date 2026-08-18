@@ -4,39 +4,78 @@
 
 ## 文件分别演示什么
 
-| 文件 | 内容 |
-| --- | --- |
+| 文件                     | 内容                                                                     |
+| ------------------------ | ------------------------------------------------------------------------ |
 | `agent/domain-pack.yaml` | 产品 Schema、Workflow、Profile、Capability Allow-list、Policy 与 Fixture |
-| `agent/prompt.json` | 版本化 Prompt 注册请求 |
-| `agent/skill.md` | 渐进式 Skill 与 Trust 声明 |
-| `agent/hypha.user.yaml` | Server 部署 Overlay |
-| `src/package-tour.ts` | 全部公开包各一个代表性边界 |
-| `src/agent.ts` | Domain 编译、Agent Patch 与自定义 FSM 生成 |
-| `src/contract.test.ts` | 确定性编译/拓扑断言 |
-| `src/run-agent.ts` | Prompt/Skill 注册与 Durable ReAct Run 提交 |
-| `src/run-fsm.ts` | 自定义 FSM Run 与 Revision-aware 迁移 |
+| `agent/prompt.json`      | 版本化 Prompt 注册请求                                                   |
+| `agent/skill.md`         | 渐进式 Skill 与 Trust 声明                                               |
+| `agent/hypha.user.yaml`  | Server 部署 Overlay                                                      |
+| `src/features/*.ts`      | 按功能边界拆分的 7 个可复制示例                                          |
+| `src/run-feature.ts`     | 选择并运行单个功能示例的 CLI                                             |
+| `src/package-tour.ts`    | 组合全部功能示例与公开包                                                 |
+| `src/agent.ts`           | Domain 编译、Agent Patch 与自定义 FSM 生成                               |
+| `src/contract.test.ts`   | 确定性编译/拓扑断言                                                      |
+| `src/run-agent.ts`       | Prompt/Skill 注册与 Durable ReAct Run 提交                               |
+| `src/run-fsm.ts`         | 自定义 FSM Run 与 Revision-aware 迁移                                    |
+
+## 一次运行一个功能
+
+每个 Feature Entry 都保持足够小，只导入该边界真正需要的包。
+
+| Feature                   | 源码                                                                                                                                          | 实际执行内容                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `core-storage`            | [`core-storage.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/core-storage.ts)                       | 运行时校验 System Spec 并组合 SQLite 拓扑      |
+| `fsm`                     | [`fsm.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/fsm.ts)                                         | 解析 Process、分析拓扑并创建初始 Snapshot      |
+| `inference-models`        | [`inference-models.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/inference-models.ts)               | 注册 Model/Inference Provider 并执行标准化请求 |
+| `capabilities`            | [`capabilities.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/capabilities.ts)                       | 注册 Tool/Skill，校验 MCP Allow-list           |
+| `domain-kernel-memory`    | [`domain-kernel-memory.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/domain-kernel-memory.ts)       | 校验 Domain、ReAct Agent 与 Memory 契约        |
+| `events-harness-adapters` | [`events-harness-adapters.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/events-harness-adapters.ts) | 记录 Event、重建 Session、创建本地 Profile     |
+| `cache-testing`           | [`cache-testing.ts`](https://github.com/CodeSoul-co/Hypha/blob/main/examples/release-agent/src/features/cache-testing.ts)                     | 验证 Cache Hit 与确定性 State-path 断言        |
+
+```bash
+cd examples/release-agent
+npm install
+npm run feature -- fsm
+```
+
+预期输出结构：
+
+```json
+{
+  "feature": "fsm",
+  "result": {
+    "processId": "fsm.react.default",
+    "initialState": "Idle",
+    "reachableStates": ["Idle", "Reasoning", "HumanReview", "Completed", "Failed"],
+    "unreachableStates": [],
+    "terminalStates": ["Completed", "Failed"]
+  }
+}
+```
+
+使用[逐功能地图](/zh/guide/capability-map)理解边界，使用[完整 API 参考](/zh/api/)查询每个导入类、函数与成员。
 
 ## 15 包 Tour 分别验证什么
 
 Tour 不只是 Import Smoke；它实际执行每个已发布包的一条稳定边界。
 
-| 包 | 操作 | 预期证据 |
-| --- | --- | --- |
-| [`hypha-core`](/zh/packages/core) | 解析 Harnessed System、创建作用域 Event | System/Event ID |
-| [`hypha-storage`](/zh/packages/storage) | 构建 SQLite 拓扑 | Provider Engine |
-| [`hypha-fsm`](/zh/packages/fsm) | 解析/分析拓扑并创建 Snapshot | 初始/可达状态 |
-| [`hypha-kernel`](/zh/packages/kernel) | 解析 ReAct Agent Spec | Agent ID |
-| [`hypha-harness`](/zh/packages/harness) | 记录 Event 并投影 Session | Session ID |
-| [`hypha-models`](/zh/packages/models) | 注册 Mock Provider、解析 Routing | Provider/Alias 数量 |
-| [`hypha-inference`](/zh/packages/inference) | 执行统一 Inference | Echo Response |
-| [`hypha-memory`](/zh/packages/memory) | 解析 Memory Spec | Memory Profile ID |
-| [`hypha-skills`](/zh/packages/skills) | 解析并注册 Skill | Skill ID |
-| [`hypha-tools`](/zh/packages/tools) | 解析并注册 Tool Handler | Tool Contract ID |
-| [`hypha-mcp`](/zh/packages/mcp) | 解析 Integration Spec | Server ID |
-| [`hypha-domain`](/zh/packages/domain) | 解析并编译 Domain Pack | Pack/Workflow ID |
-| [`hypha-adapters-local`](/zh/packages/adapters-local) | 创建本地 Profile | SQLite/Vector/Artifact Engine |
-| [`hypha-serving-cache`](/zh/packages/serving-cache) | 生成 Key、写入并读取 | Cache Hit |
-| [`hypha-testing`](/zh/packages/testing) | 断言确定性 State Path | `true` |
+| 包                                                    | 操作                                    | 预期证据                      |
+| ----------------------------------------------------- | --------------------------------------- | ----------------------------- |
+| [`hypha-core`](/zh/packages/core)                     | 解析 Harnessed System、创建作用域 Event | System/Event ID               |
+| [`hypha-storage`](/zh/packages/storage)               | 构建 SQLite 拓扑                        | Provider Engine               |
+| [`hypha-fsm`](/zh/packages/fsm)                       | 解析/分析拓扑并创建 Snapshot            | 初始/可达状态                 |
+| [`hypha-kernel`](/zh/packages/kernel)                 | 解析 ReAct Agent Spec                   | Agent ID                      |
+| [`hypha-harness`](/zh/packages/harness)               | 记录 Event 并投影 Session               | Session ID                    |
+| [`hypha-models`](/zh/packages/models)                 | 注册 Mock Provider、解析 Routing        | Provider/Alias 数量           |
+| [`hypha-inference`](/zh/packages/inference)           | 执行统一 Inference                      | Echo Response                 |
+| [`hypha-memory`](/zh/packages/memory)                 | 解析 Memory Spec                        | Memory Profile ID             |
+| [`hypha-skills`](/zh/packages/skills)                 | 解析并注册 Skill                        | Skill ID                      |
+| [`hypha-tools`](/zh/packages/tools)                   | 解析并注册 Tool Handler                 | Tool Contract ID              |
+| [`hypha-mcp`](/zh/packages/mcp)                       | 解析 Integration Spec                   | Server ID                     |
+| [`hypha-domain`](/zh/packages/domain)                 | 解析并编译 Domain Pack                  | Pack/Workflow ID              |
+| [`hypha-adapters-local`](/zh/packages/adapters-local) | 创建本地 Profile                        | SQLite/Vector/Artifact Engine |
+| [`hypha-serving-cache`](/zh/packages/serving-cache)   | 生成 Key、写入并读取                    | Cache Hit                     |
+| [`hypha-testing`](/zh/packages/testing)               | 断言确定性 State Path                   | `true`                        |
 
 ## 运行全包 Tour
 
@@ -44,12 +83,13 @@ Tour 不只是 Import Smoke；它实际执行每个已发布包的一条稳定�
 git clone https://github.com/CodeSoul-co/Hypha.git
 cd Hypha/examples/release-agent
 npm install
+npm run feature -- fsm
 npm run tour
 npm run compile-agent
 npm test
 ```
 
-`tour` 只在所有代表性边界成功后输出 JSON。`compile-agent` 输出两个不同 Process：
+`tour` 组合全部 7 个 Feature Entry，只在所有代表性边界成功后输出 JSON。`compile-agent` 输出两个不同 Process：
 
 - `reactHarnessFsm`：Framework 拥有的 ReAct 生命周期。
 - `customWorkflowFsm`：从 Domain Pack Workflow 生成的应用拓扑。
@@ -58,14 +98,14 @@ Contract Test 会把同一 Pack 编译两次，比较 Harness System 和两套 F
 
 ```text
 npm run tour
-  → 15 个包边界全部成功后输出 JSON
+  → 7 个功能入口 / 15 个包边界全部成功后输出 JSON
 npm run compile-agent
   → 输出 Agent Patch、Harness FSM 与应用 FSM
 npm test
   → "Release Agent contract is deterministic and valid."
 ```
 
-示例把所有依赖固定在 `1.0.1`，同时也是外部 Consumer 兼容性测试。升级时一起更新全部 Hypha 包，并重跑三个命令。
+示例把所有依赖固定在 `1.0.1`，同时也是外部 Consumer 兼容性测试。升级时一起更新全部 Hypha 包，并重跑 Feature、Tour、Compile 与 Test 命令。
 
 ## 连接 Server 运行
 

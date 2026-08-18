@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildReleaseAgent } from './agent';
+import { runAllFeatureExamples } from './features';
 
 async function main(): Promise<void> {
   const first = await buildReleaseAgent();
@@ -24,6 +25,16 @@ async function main(): Promise<void> {
   );
   assert.deepEqual(first.agent.toolRefs, ['search']);
   assert.deepEqual(first.agent.skillRefs, [{ id: 'skill.release-research', version: '1.0.0' }]);
+
+  const features = await runAllFeatureExamples();
+  assert.equal(features['core-storage'].storageEngines[0], 'sqlite');
+  assert.equal(features.fsm.initialState, 'Idle');
+  assert.equal(features['inference-models'].inferenceOutput, 'provider-neutral inference');
+  assert.equal(features.capabilities.toolId, 'tool.search');
+  assert.equal(features['domain-kernel-memory'].memoryProfileId, 'memory.default');
+  assert.deepEqual(features['events-harness-adapters'].sessionIds, ['session-tour']);
+  assert.equal(features['cache-testing'].cacheHit, true);
+  assert.equal(features['cache-testing'].statePathMatches, true);
 
   process.stdout.write('Release Agent contract is deterministic and valid.\n');
 }

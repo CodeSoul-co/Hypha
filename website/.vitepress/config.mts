@@ -11,7 +11,10 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', href: '/Hypha/hypha-logo.png' }],
     ['meta', { name: 'theme-color', content: '#ffffff' }],
-    ['meta', { property: 'og:image', content: 'https://codesoul-co.github.io/Hypha/hypha-logo.png' }],
+    [
+      'meta',
+      { property: 'og:image', content: 'https://codesoul-co.github.io/Hypha/hypha-logo.png' },
+    ],
   ],
   locales: {
     root: {
@@ -48,6 +51,7 @@ function englishTheme(): DefaultTheme.Config {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Packages', link: '/packages/' },
+      { text: 'API', link: '/api/' },
       { text: 'Examples', link: '/guide/examples' },
       { text: `v${release}`, link: 'https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.1' },
       { text: 'Official site ↗', link: 'https://hypha.code-soul.com/' },
@@ -59,6 +63,7 @@ function englishTheme(): DefaultTheme.Config {
           items: [
             { text: 'Get started', link: '/guide/getting-started' },
             { text: 'Architecture', link: '/guide/architecture' },
+            { text: 'Feature map', link: '/guide/capability-map' },
             { text: 'Control an FSM', link: '/guide/fsm-control' },
             { text: 'Compose a full system', link: '/guide/full-system' },
             { text: 'Runnable examples', link: '/guide/examples' },
@@ -66,6 +71,7 @@ function englishTheme(): DefaultTheme.Config {
         },
       ],
       '/packages/': packageSidebar('Package reference'),
+      '/api/': apiSidebar('Complete API'),
     },
     outline: { label: 'On this page', level: [2, 3] },
     docFooter: { prev: 'Previous', next: 'Next' },
@@ -83,6 +89,7 @@ function chineseTheme(): DefaultTheme.Config {
     nav: [
       { text: '指南', link: '/zh/guide/getting-started' },
       { text: '模块', link: '/zh/packages/' },
+      { text: 'API', link: '/zh/api/' },
       { text: '示例', link: '/zh/guide/examples' },
       { text: `v${release}`, link: 'https://github.com/CodeSoul-co/Hypha/releases/tag/v1.0.1' },
       { text: '官方网站 ↗', link: 'https://hypha.code-soul.com/' },
@@ -94,6 +101,7 @@ function chineseTheme(): DefaultTheme.Config {
           items: [
             { text: '快速开始', link: '/zh/guide/getting-started' },
             { text: '系统架构', link: '/zh/guide/architecture' },
+            { text: '逐功能地图', link: '/zh/guide/capability-map' },
             { text: '控制 FSM', link: '/zh/guide/fsm-control' },
             { text: '组合完整系统', link: '/zh/guide/full-system' },
             { text: '可运行示例', link: '/zh/guide/examples' },
@@ -101,6 +109,7 @@ function chineseTheme(): DefaultTheme.Config {
         },
       ],
       '/zh/packages/': packageSidebar('模块参考', '/zh'),
+      '/zh/api/': apiSidebar('完整 API', '/zh'),
     },
     outline: { label: '本页内容', level: [2, 3] },
     docFooter: { prev: '上一页', next: '下一页' },
@@ -112,13 +121,53 @@ function chineseTheme(): DefaultTheme.Config {
   };
 }
 
+function apiSidebar(title: string, prefix = ''): DefaultTheme.SidebarItem[] {
+  return [
+    {
+      text: title,
+      items: [{ text: 'Overview / 总览', link: `${prefix}/api/` }],
+    },
+    {
+      text: 'Contracts & execution',
+      collapsed: false,
+      items: [
+        { text: 'Core', link: `${prefix}/api/core` },
+        { text: 'Storage', link: `${prefix}/api/storage` },
+        { text: 'FSM', link: `${prefix}/api/fsm` },
+        { text: 'Kernel', link: `${prefix}/api/kernel` },
+        { text: 'Harness', link: `${prefix}/api/harness` },
+      ],
+    },
+    {
+      text: 'Intelligence & capabilities',
+      collapsed: true,
+      items: [
+        { text: 'Models', link: `${prefix}/api/models` },
+        { text: 'Inference', link: `${prefix}/api/inference` },
+        { text: 'Memory', link: `${prefix}/api/memory` },
+        { text: 'Skills', link: `${prefix}/api/skills` },
+        { text: 'Tools', link: `${prefix}/api/tools` },
+        { text: 'MCP', link: `${prefix}/api/mcp` },
+      ],
+    },
+    {
+      text: 'Composition & operations',
+      collapsed: true,
+      items: [
+        { text: 'Domain', link: `${prefix}/api/domain` },
+        { text: 'Adapters Local', link: `${prefix}/api/adapters-local` },
+        { text: 'Serving Cache', link: `${prefix}/api/serving-cache` },
+        { text: 'Testing', link: `${prefix}/api/testing` },
+      ],
+    },
+  ];
+}
+
 function packageSidebar(title: string, prefix = ''): DefaultTheme.SidebarItem[] {
   return [
     {
       text: title,
-      items: [
-        { text: 'Overview / 总览', link: `${prefix}/packages/` },
-      ],
+      items: [{ text: 'Overview / 总览', link: `${prefix}/packages/` }],
     },
     {
       text: 'Contracts / 契约',
