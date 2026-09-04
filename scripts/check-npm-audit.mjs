@@ -14,7 +14,7 @@ function run() {
   const audit = spawnSync(npmCommand, ['audit', '--json'], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
-    timeout: 180_000,
+    timeout: 420_000,
   });
 
   if (audit.error) {
