@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "expiresOn": "2026-10-04",
+  "exceptions": {
+    "decode-uri-component": {
+      "severity": "moderate",
+      "nodes": ["node_modules/decode-uri-component"],
+      "advisories": ["GHSA-vcc3-ghjq-m6fr"],
+      "reason": "MinIO 8.0.7 only calls query-string stringify; its production source does not call query-string parse, so the vulnerable decoder is not invoked. MinIO PR #1494 is not build-clean."
+    },
+    "query-string": {
+      "severity": "moderate",
+      "nodes": ["node_modules/query-string"],
+      "advisories": ["GHSA-vcc3-ghjq-m6fr"],
+      "reason": "This is the propagated decode-uri-component finding. Hypha reaches query-string only through MinIO's stringify calls."
+    },
+    "stream-json": {
+      "severity": "moderate",
+      "nodes": ["node_modules/stream-json"],
+      "advisories": ["GHSA-528h-pc64-c93x"],
+      "reason": "MinIO imports the JSONL parser; the advisory affects pick, ignore, filter, and replace path filters and explicitly excludes streamers. MinIO PR #1497 breaks the current import path."
+    },
+    "minio": {
+      "severity": "moderate",
+      "nodes": ["node_modules/minio"],
+      "advisories": ["GHSA-528h-pc64-c93x", "GHSA-vcc3-ghjq-m6fr"],
+      "reason": "Aggregate npm audit finding propagated from the two reviewed, unreachable transitive paths documented above."
+    }
+  }
+}

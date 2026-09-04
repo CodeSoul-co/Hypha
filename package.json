@@ -19,6 +19,7 @@
     "build:server": "tsc -p apps/server/tsconfig.json",
     "build:cli": "tsc -p apps/cli/tsconfig.json && node scripts/make-cli-executable.mjs",
     "docs:api": "node scripts/generate-website-api-reference.mjs",
+    "audit": "node scripts/check-npm-audit.mjs",
     "release:check:npm": "npm run build --workspaces --if-present && node scripts/check-npm-release.mjs",
     "typecheck:release-example": "tsc -p examples/release-agent/tsconfig.json --noEmit",
     "start": "node dist/apps/server/app.js",
@@ -27,7 +28,8 @@
     "typecheck:cli": "tsc -p apps/cli/tsconfig.json --noEmit",
     "typecheck:packages": "tsc -p tsconfig.typecheck.json --noEmit",
     "test": "npm run test:unit && npm run test:packages && npm run test:integration",
-    "test:unit": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects unit --detectOpenHandles",
+    "test:unit": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects unit --detectOpenHandles && npm run test:audit-policy",
+    "test:audit-policy": "node --test scripts/check-npm-audit.test.mjs",
     "test:packages": "vitest run",
     "test:integration": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects integration --runInBand --detectOpenHandles",
     "test:acceptance:memory-external": "HYPHA_MEMORY_EXTERNAL_ACCEPTANCE_MODE=required node --experimental-vm-modules ./node_modules/jest/bin/jest.js --selectProjects memory-external-acceptance --runInBand --detectOpenHandles",
@@ -134,5 +136,8 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "overrides": {
+    "qs": "6.16.0"
   }
 }

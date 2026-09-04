@@ -76,7 +76,7 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      - run: npm audit
+      - run: npm run audit
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
