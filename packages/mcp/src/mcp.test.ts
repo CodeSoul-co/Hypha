@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { InMemoryEventStore, InMemoryTelemetryRecorder } from '@codesoul-co/hypha-core';
 import {
   GovernedToolRunner,
@@ -39,6 +41,85 @@ import {
   type MCPCapabilityDescriptor,
   type MCPServerProfile,
 } from './index';
+
+async function createInitializationFixture(responseDelayMs = 0): Promise<{
+  endpoint: string;
+  initializeRequests: () => number;
+  waitForInitialize: () => Promise<void>;
+  close: () => Promise<void>;
+}> {
+  let initializeRequests = 0;
+  let notifyInitialize: (() => void) | undefined;
+  const initializeReceived = new Promise<void>((resolve) => {
+    notifyInitialize = resolve;
+  });
+  const httpServer = createServer(async (request, response) => {
+    if (request.method !== 'POST') {
+      response.writeHead(405).end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const message = JSON.parse(Buffer.concat(chunks).toString()) as {
+      id?: string | number;
+      method?: string;
+    };
+    if (message.method !== 'initialize') {
+      response.writeHead(202).end();
+      return;
+    }
+    initializeRequests += 1;
+    notifyInitialize?.();
+    if (responseDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, responseDelayMs));
+    }
+    if (response.destroyed) return;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          serverInfo: { name: 'abort-fixture', version: '1.0.0' },
+        },
+      })
+    );
+  });
+  httpServer.listen(0, '127.0.0.1');
+  await once(httpServer, 'listening');
+  const address = httpServer.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Initialization fixture server has no port.');
+  }
+  return {
+    endpoint: `http://127.0.0.1:${address.port}/mcp`,
+    initializeRequests: () => initializeRequests,
+    waitForInitialize: () => initializeReceived,
+    close: async () => {
+      httpServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        httpServer.close((error) => (error ? reject(error) : resolve()))
+      );
+    },
+  };
+}
+
+function createSDKHTTPConnectionSession(endpoint: string): MCPConnectionSession {
+  return new SDKMCPConnectionSessionFactory().create({
+    id: 'abort-fixture',
+    mode: 'fixture',
+    transport: { type: 'streamable_http', endpoint },
+    egressPolicy: {
+      allowedHosts: ['127.0.0.1'],
+      denyPrivateNetworks: false,
+      requireTls: false,
+    },
+  });
+}
 
 describe('@codesoul-co/hypha-mcp normalization', () => {
   it('unwraps structured Tool output without misclassifying domain objects', () => {
@@ -1329,6 +1410,57 @@ describe('@codesoul-co/hypha-mcp normalization', () => {
 
     await manager.closeAll();
     await expect(manager.get('stdio-fixture')).resolves.toMatchObject({ state: 'closed' });
+  });
+
+  it('rejects an already-aborted signal before SDK initialization starts', async () => {
+    const fixture = await createInitializationFixture();
+    const session = createSDKHTTPConnectionSession(fixture.endpoint);
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled before connect'));
+
+    try {
+      await expect(session.connect(controller.signal)).rejects.toThrow('cancelled before connect');
+      expect(fixture.initializeRequests()).toBe(0);
+    } finally {
+      await session.close().catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it('aborts and cleans up SDK initialization while the response is pending', async () => {
+    const fixture = await createInitializationFixture(150);
+    const session = createSDKHTTPConnectionSession(fixture.endpoint);
+    const controller = new AbortController();
+    const connecting = session.connect(controller.signal);
+
+    try {
+      await fixture.waitForInitialize();
+      controller.abort(new Error('cancelled during connect'));
+      await expect(connecting).rejects.toThrow('cancelled during connect');
+      expect(fixture.initializeRequests()).toBe(1);
+      await expect(session.connect()).resolves.toMatchObject({
+        negotiatedProtocolVersion: '2025-11-25',
+      });
+    } finally {
+      await session.close().catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it('preserves SDK initialization when no cancellation signal is provided', async () => {
+    const fixture = await createInitializationFixture();
+    const session = createSDKHTTPConnectionSession(fixture.endpoint);
+
+    try {
+      await expect(session.connect()).resolves.toMatchObject({
+        negotiatedProtocolVersion: '2025-11-25',
+        serverInfo: { name: 'abort-fixture', version: '1.0.0' },
+      });
+      expect(fixture.initializeRequests()).toBe(1);
+    } finally {
+      await session.close().catch(() => undefined);
+      await fixture.close();
+    }
   });
 
   it('connects through the real MCP Streamable HTTP transport', async () => {

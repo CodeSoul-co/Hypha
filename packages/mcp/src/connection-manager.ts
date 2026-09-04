@@ -1157,39 +1157,46 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
     private readonly options: SDKMCPConnectionSessionFactoryOptions
   ) {}
 
-  async connect(): Promise<{
+  async connect(signal?: AbortSignal): Promise<{
     negotiatedProtocolVersion?: string;
     serverInfo?: Record<string, unknown>;
     serverCapabilities?: Record<string, unknown>;
   }> {
+    signal?.throwIfAborted();
     this.transport = await this.createTransport();
-    const versionedTransport = this.transport as typeof this.transport & {
-      setProtocolVersion?: (version: string) => void;
-    };
-    const setProtocolVersion = versionedTransport.setProtocolVersion?.bind(versionedTransport);
-    versionedTransport.setProtocolVersion = (version: string) => {
-      this.negotiatedProtocolVersion = version;
-      setProtocolVersion?.(version);
-    };
-    this.client = new Client(this.options.clientInfo ?? { name: 'hypha', version: '1.0.0' }, {
-      capabilities: {},
-      enforceStrictCapabilities: true,
-      listChanged: {
-        tools: { onChanged: () => this.onListChanged?.() },
-        resources: { onChanged: () => this.onListChanged?.() },
-        prompts: { onChanged: () => this.onListChanged?.() },
-      },
-    });
-    this.client.onclose = () => this.onClose?.();
-    this.client.onerror = (error) => this.onClose?.(error);
-    await this.client.connect(this.transport);
-    return {
-      negotiatedProtocolVersion: this.negotiatedProtocolVersion,
-      serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
-      serverCapabilities: this.client.getServerCapabilities() as
-        | Record<string, unknown>
-        | undefined,
-    };
+    try {
+      signal?.throwIfAborted();
+      const versionedTransport = this.transport as typeof this.transport & {
+        setProtocolVersion?: (version: string) => void;
+      };
+      const setProtocolVersion = versionedTransport.setProtocolVersion?.bind(versionedTransport);
+      versionedTransport.setProtocolVersion = (version: string) => {
+        this.negotiatedProtocolVersion = version;
+        setProtocolVersion?.(version);
+      };
+      this.client = new Client(this.options.clientInfo ?? { name: 'hypha', version: '1.0.0' }, {
+        capabilities: {},
+        enforceStrictCapabilities: true,
+        listChanged: {
+          tools: { onChanged: () => this.onListChanged?.() },
+          resources: { onChanged: () => this.onListChanged?.() },
+          prompts: { onChanged: () => this.onListChanged?.() },
+        },
+      });
+      this.client.onclose = () => this.onClose?.();
+      this.client.onerror = (error) => this.onClose?.(error);
+      await this.client.connect(this.transport, signal ? { signal } : undefined);
+      return {
+        negotiatedProtocolVersion: this.negotiatedProtocolVersion,
+        serverInfo: this.client.getServerVersion() as Record<string, unknown> | undefined,
+        serverCapabilities: this.client.getServerCapabilities() as
+          | Record<string, unknown>
+          | undefined,
+      };
+    } catch (error) {
+      await this.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async listCapabilities(signal?: AbortSignal): Promise<MCPCapabilityDescriptor[]> {
@@ -1369,10 +1376,15 @@ class SDKMCPConnectionSession implements MCPConnectionSession {
 
   async close(): Promise<void> {
     const client = this.client;
+    const transport = this.transport;
     this.client = undefined;
-    if (client) await client.close();
     this.transport = undefined;
     this.negotiatedProtocolVersion = undefined;
+    if (client) {
+      await client.close();
+      return;
+    }
+    if (transport) await transport.close();
   }
 
   private async createTransport(): Promise<StdioClientTransport | StreamableHTTPClientTransport> {
