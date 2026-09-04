@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { validateReport } from './check-npm-audit.mjs';
+import { runAudit, validateReport } from './check-npm-audit.mjs';
 
 const advisory = {
   source: 1,
@@ -49,6 +49,26 @@ function policy() {
 }
 
 describe('npm audit policy', () => {
+  it('retries transient and malformed audit responses before accepting a valid report', () => {
+    const expected = report();
+    const responses = [
+      { error: new Error('temporary registry failure') },
+      { stdout: '{"error":"registry busy"}', stderr: '' },
+      { stdout: JSON.stringify(expected), stderr: '' },
+    ];
+    const warnings = [];
+
+    const actual = runAudit(
+      'npm',
+      () => responses.shift(),
+      (message) => warnings.push(message),
+      () => assert.fail('valid final response must not fail')
+    );
+
+    assert.deepEqual(actual, expected);
+    assert.equal(warnings.length, 2);
+  });
+
   it('accepts only the exact, unexpired report described by policy', () => {
     assert.deepEqual(validateReport(report(), policy(), new Date('2026-09-04T00:00:00Z')), []);
   });

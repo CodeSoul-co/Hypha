@@ -11,23 +11,8 @@ function run() {
   const policyPath = fileURLToPath(new URL('./npm-audit-policy.json', import.meta.url));
   const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
   const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const audit = spawnSync(npmCommand, ['audit', '--json'], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 420_000,
-  });
-
-  if (audit.error) {
-    console.error(`Unable to run npm audit: ${audit.error.message}`);
-    process.exit(1);
-  }
-
-  let report;
-  try {
-    report = JSON.parse(audit.stdout);
-  } catch {
-    console.error('npm audit did not return valid JSON.');
-    if (audit.stderr) console.error(audit.stderr.trim());
+  const report = runAudit(npmCommand);
+  if (!report) {
     process.exit(1);
   }
 
@@ -49,6 +34,45 @@ function run() {
       console.warn(`- ${name}: ${exception.reason}`);
     }
   }
+}
+
+export function runAudit(
+  npmCommand,
+  execute = spawnSync,
+  warn = console.warn,
+  fail = console.error
+) {
+  const maxAttempts = 3;
+  let lastFailure = 'unknown npm audit failure';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const audit = execute(npmCommand, ['audit', '--json'], {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 180_000,
+    });
+
+    if (audit.error) {
+      lastFailure = audit.error.message;
+    } else {
+      try {
+        const report = JSON.parse(audit.stdout);
+        if (report?.auditReportVersion === 2 && isRecord(report.vulnerabilities)) {
+          return report;
+        }
+        lastFailure = `unexpected JSON response: ${summarize(report)}`;
+      } catch {
+        lastFailure = audit.stderr.trim() || 'npm audit did not return valid JSON';
+      }
+    }
+
+    if (attempt < maxAttempts) {
+      warn(`npm audit attempt ${attempt} failed (${lastFailure}); retrying.`);
+    }
+  }
+
+  fail(`Unable to obtain a valid npm audit report after ${maxAttempts} attempts: ${lastFailure}`);
+  return undefined;
 }
 
 export function validateReport(reportValue, policyValue, now) {
@@ -135,4 +159,9 @@ function sameStrings(actual, expected) {
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function summarize(value) {
+  const summary = JSON.stringify(value) ?? String(value);
+  return summary.length > 500 ? `${summary.slice(0, 500)}...` : summary;
 }
