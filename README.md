@@ -21,9 +21,7 @@
   · <a href="https://www.npmjs.com/org/codesoul-co">npm Packages</a>
 </p>
 
-> **Current public release:** v1.0.1, with 15 aligned packages named
 > `@codesoul-co/hypha-*`. The [versioned user guide](https://codesoul-co.github.io/Hypha/)
-> includes an API atlas for every package, custom FSM control, and a complete composition example.
 
 ## What is hypha?
 
