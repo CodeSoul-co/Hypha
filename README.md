@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Agent Core + Production Harness for governed, durable, and reusable domain agents.</strong>
+  <strong>Agent Core + Production Harness for governed, durable, and reusable domain agent.</strong>
 </p>
 
 <p align="center">
